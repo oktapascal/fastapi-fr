@@ -265,7 +265,7 @@ pengecekan `flag_aktif` di Lumen. Hapus vektornya juga.
 
 ```ini
 # .env Lumen
-FACE_SERVICE_URL=http://127.0.0.1:8000
+FACE_SERVICE_URL=http://127.0.0.1:3000
 FACE_API_KEY=<sama persis dengan API_KEY di .env service Python>
 ```
 

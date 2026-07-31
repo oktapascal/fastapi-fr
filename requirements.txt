@@ -1,3 +1,9 @@
+# Wheel CPU-only untuk torch/torchvision. Tanpa baris ini, `pip install -r`
+# di Linux menarik ~2 GB paket CUDA dari PyPI yang tidak terpakai di server
+# tanpa GPU. Suffix +cpu hanya ada di index PyTorch, jadi kedua paket di bawah
+# dijamin datang dari sana, bukan dari PyPI.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anyio==4.14.2
@@ -45,8 +51,8 @@ sentry-sdk==2.66.1
 shellingham==1.5.4
 starlette==0.47.3
 sympy==1.14.0
-torch==2.2.2
-torchvision==0.17.2
+torch==2.2.2+cpu
+torchvision==0.17.2+cpu
 tqdm==4.70.0
 typer==0.27.0
 typing-inspection==0.4.2

@@ -84,7 +84,7 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
 ### 4. Jalankan
 
 ```powershell
-venv\Scripts\uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+venv\Scripts\uvicorn app.main:app --reload --host 127.0.0.1 --port 3000
 ```
 
 Startup pertama mengunduh bobot `vggface2` (~100 MB) ke
@@ -94,16 +94,16 @@ Startup pertama mengunduh bobot `vggface2` (~100 MB) ke
 
 ```powershell
 # Health check — tanpa auth, menampilkan jumlah wajah yang termuat
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:3000/health
 
 # Verify (1:1) — dua frame: netral + setelah gerakan challenge
-curl -X POST http://127.0.0.1:8000/api/face/verify `
+curl -X POST http://127.0.0.1:3000/api/face/verify `
   -H "X-API-Key: <api-key>" `
   -F "nik=12345" -F "challenge=smile" `
   -F "file_a=@netral.jpg" -F "file_b=@senyum.jpg"
 ```
 
-Dokumentasi interaktif: <http://127.0.0.1:8000/docs>
+Dokumentasi interaktif: <http://127.0.0.1:3000/docs>
 
 Jalankan self-check logika pencocokan:
 
@@ -152,19 +152,25 @@ python3.11 -m venv venv
 source venv/bin/activate
 ```
 
-### 3. Install dependensi — **pakai wheel CPU-only**
+### 3. Install dependensi
 
 ```bash
-# torch versi default di Linux menarik dependensi CUDA (~2 GB) yang tidak
-# terpakai di server tanpa GPU. Install wheel CPU dulu, baru sisanya.
-pip install torch==2.2.2 torchvision==0.17.2 \
-  --index-url https://download.pytorch.org/whl/cpu
-
 pip install -r requirements.txt
 ```
 
-Urutannya penting: `torch` yang sudah terpasang tidak akan ditimpa oleh
-`requirements.txt` karena versinya sama persis.
+Satu perintah saja. `requirements.txt` sudah menyematkan `torch==2.2.2+cpu`
+beserta `--extra-index-url` ke index CPU PyTorch, jadi paket CUDA (~2 GB) tidak
+akan ikut terunduh — tidak ada langkah manual yang bisa terlupa.
+
+Verifikasi setelah install:
+
+```bash
+python -c "import torch; print(torch.__version__, torch.version.cuda)"
+# harus mencetak: 2.2.2+cpu None
+```
+
+Kalau `torch.version.cuda` bukan `None`, berarti ada yang menginstal ulang torch
+dari PyPI tanpa pin `+cpu`.
 
 ### 4. Konfigurasi
 
@@ -194,7 +200,7 @@ module.exports = {
     name: "face-api",
     cwd: "/opt/face-api",
     script: "venv/bin/python",
-    args: "-m uvicorn app.main:app --host 127.0.0.1 --port 8000",
+    args: "-m uvicorn app.main:app --host 127.0.0.1 --port 3000",
     interpreter: "none",          // script sudah executable, jangan lewat node
     instances: 1,                 // WAJIB 1 — lihat catatan di bawah
     autorestart: true,
@@ -223,7 +229,7 @@ pm2 startup        # jalankan perintah yang ditampilkan agar survive reboot
 
 ```bash
 pm2 logs face-api --lines 50
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:3000/health
 ```
 
 `faces_loaded` harus sama dengan jumlah baris di `karyawan_vector`. Kalau `0`
@@ -240,7 +246,7 @@ Service ini **bind ke `127.0.0.1`**, jadi tidak terjangkau dari luar server.
   jangan mengandalkan API key sendirian.
 
   ```bash
-  sudo ufw allow from <IP-server-lumen> to any port 8000 proto tcp
+  sudo ufw allow from <IP-server-lumen> to any port 3000 proto tcp
   ```
 
 Jangan pernah menaruh service ini langsung di internet. Endpoint `/verify`
