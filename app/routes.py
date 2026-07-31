@@ -43,7 +43,7 @@ def enroll(
     dilakukan petugas secara terawasi, jadi risikonya berbeda dari verifikasi.
 
     Validasi bahwa NIK ada di master karyawan dilakukan oleh Lumen — service ini
-    sengaja tidak menyentuh tabel karyawan sama sekali.
+    sengaja tidak menyentuh tabel hr_karyawan sama sekali.
     """
     try:
         vec = face.embed(_read_image(file))

@@ -22,7 +22,7 @@ dan [`docs/integrasi-lumen.md`](docs/integrasi-lumen.md).
 | ODBC Driver for SQL Server | 17 atau 18 | **wajib**, pyodbc tidak jalan tanpa ini |
 | SQL Server | 2019 | tabel `karyawan_vector` sudah ada |
 
-Tabel yang dipakai hanya `karyawan_vector`. Tabel `karyawan` **tidak** disentuh
+Tabel yang dipakai hanya `karyawan_vector`. Tabel `hr_karyawan` **tidak** disentuh
 oleh service ini — validasi NIK ada di Lumen.
 
 ---

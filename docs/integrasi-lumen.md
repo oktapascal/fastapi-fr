@@ -13,7 +13,7 @@ Pasangan dokumen ini: [`integrasi-laravel.md`](integrasi-laravel.md).
 Lumen adalah **pemilik data dan aturan bisnis**. Dalam alur ini:
 
 1. Memvalidasi JWT dan **menentukan siapa user-nya dari klaim token**.
-2. Memvalidasi bahwa NIK ada dan aktif di master `karyawan`.
+2. Memvalidasi bahwa NIK ada dan aktif di master `hr_karyawan`.
 3. Memanggil service Python untuk verifikasi wajah.
 4. Mencatat absensi — atau mencatat kegagalannya.
 
@@ -88,7 +88,7 @@ Yang tidak sah: `$request->input('nik')`, query string, header dari klien.
 ## 2. Validasi Master Karyawan
 
 ```php
-    $karyawan = DB::table('karyawan')
+    $karyawan = DB::table('hr_karyawan')
         ->where('nik', $nik)
         ->where('kode_lokasi', $kodeLokasi)
         ->where('flag_aktif', 'Y')
@@ -102,8 +102,10 @@ Yang tidak sah: `$request->input('nik')`, query string, header dari klien.
     }
 ```
 
-Tabel `karyawan` punya primary key komposit `(nik, kode_lokasi)`, jadi keduanya
-diperlukan. Karyawan non-aktif harus ditolak di sini — service Python tidak tahu
+Karyawan diidentifikasi oleh pasangan `(nik, kode_lokasi)`, jadi keduanya
+diperlukan. Perhatikan: `hr_karyawan` **tidak punya primary key** dan kolom `nik`
+nullable — keunikan tidak dijamin database, jadi tetap pakai `first()`, jangan
+mengasumsikan hasil tunggal. Karyawan non-aktif harus ditolak di sini — service Python tidak tahu
 apa-apa soal status kepegawaian, dan wajah orang yang sudah resign masih akan
 cocok sampai vektornya dihapus.
 
@@ -221,7 +223,7 @@ $this->authorize('kelola-wajah-karyawan');
 
 // NIK di sini datang dari input — sah, karena admin mendaftarkan orang lain.
 // Karena itu validasi ke master karyawan wajib.
-$karyawan = DB::table('karyawan')
+$karyawan = DB::table('hr_karyawan')
     ->where('nik', $request->input('nik'))
     ->where('kode_lokasi', $request->input('kode_lokasi'))
     ->where('flag_aktif', 'Y')
@@ -242,7 +244,7 @@ $response = Http::withHeaders(['X-API-Key' => env('FACE_API_KEY')])
 
 Perhatikan perbedaannya dengan verifikasi: di sini NIK **memang** boleh dari
 input, karena admin mendaftarkan wajah orang lain. Justru karena itu validasi ke
-master `karyawan` menjadi wajib — service Python sengaja tidak menyentuh tabel
+master `hr_karyawan` menjadi wajib — service Python sengaja tidak menyentuh tabel
 itu sama sekali dan akan menerima NIK apa pun yang dikirim.
 
 Enroll tidak memakai liveness (satu frame saja). Prosesnya diawasi petugas, jadi
@@ -255,7 +257,7 @@ Http::withHeaders(['X-API-Key' => env('FACE_API_KEY')])
     ->delete(env('FACE_SERVICE_URL') . "/api/face/{$nik}");
 ```
 
-Menonaktifkan `flag_aktif` di `karyawan` **tidak** menghapus vektor wajah.
+Menonaktifkan `flag_aktif` di `hr_karyawan` **tidak** menghapus vektor wajah.
 Selama vektor masih ada, wajahnya masih akan cocok — yang menahannya cuma
 pengecekan `flag_aktif` di Lumen. Hapus vektornya juga.
 
