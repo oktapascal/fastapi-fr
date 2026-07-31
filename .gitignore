@@ -1,0 +1,7 @@
+dump-sql/*
+*.md
+!SETUP.md
+!docs/*.md
+.env
+venv/
+__pycache__/

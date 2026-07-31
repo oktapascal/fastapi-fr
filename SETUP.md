@@ -1,0 +1,323 @@
+# Setup Guide — Face Recognition Service
+
+Layanan ini hanya menjawab satu pertanyaan: *"benarkah wajah ini milik NIK
+tersebut?"* — verifikasi **1:1**, bukan pencarian 1:N. Lumen mengirim NIK
+beserta dua frame wajah; service memeriksa liveness lalu mencocokkan.
+Dipanggil oleh Lumen (core API), tidak pernah oleh browser secara langsung.
+
+```
+Browser → Laravel → Lumen → Python (service ini)
+```
+
+Untuk integrasi sisi PHP, lihat [`docs/integrasi-laravel.md`](docs/integrasi-laravel.md)
+dan [`docs/integrasi-lumen.md`](docs/integrasi-lumen.md).
+
+---
+
+## Prasyarat Umum
+
+| Komponen | Versi | Catatan |
+|---|---|---|
+| Python | 3.11.x | |
+| ODBC Driver for SQL Server | 17 atau 18 | **wajib**, pyodbc tidak jalan tanpa ini |
+| SQL Server | 2019 | tabel `karyawan_vector` sudah ada |
+
+Tabel yang dipakai hanya `karyawan_vector`. Tabel `karyawan` **tidak** disentuh
+oleh service ini — validasi NIK ada di Lumen.
+
+---
+
+## A. Local Development (Windows)
+
+### 1. Cek ODBC Driver
+
+```powershell
+Get-OdbcDriver -Name "*SQL Server*"
+```
+
+Kalau kosong, unduh **Microsoft ODBC Driver 17 for SQL Server** dari situs
+Microsoft dan install. Ini penyebab error paling umum saat pertama setup:
+
+```
+('01000', "[01000] [unixODBC][Driver Manager]Can't open lib ... file not found")
+```
+
+### 2. Virtual environment & dependensi
+
+```powershell
+python -m venv venv
+venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+Kalau `Activate.ps1` ditolak execution policy:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+
+### 3. Konfigurasi
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Isi `.env`:
+
+```ini
+DB_DSN=DRIVER={ODBC Driver 17 for SQL Server};SERVER=52.220.100.190,8282;DATABASE=dbproduk;UID=user;PWD=password
+API_KEY=string-acak-panjang
+MATCH_THRESHOLD=0.6556
+MAX_UPLOAD_BYTES=5242880
+```
+
+Generate API key:
+
+```powershell
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+> **Driver 18 vs 17.** Driver 18 memakai `Encrypt=yes` sebagai default dan akan
+> menolak sertifikat self-signed. Kalau pakai 18 ke SQL Server tanpa sertifikat
+> tepercaya, tambahkan `TrustServerCertificate=yes;` di DSN.
+
+### 4. Jalankan
+
+```powershell
+venv\Scripts\uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Startup pertama mengunduh bobot `vggface2` (~100 MB) ke
+`C:\Users\<user>\.cache\torch\hub\checkpoints`. Sabar, sekali saja.
+
+### 5. Verifikasi
+
+```powershell
+# Health check — tanpa auth, menampilkan jumlah wajah yang termuat
+curl http://127.0.0.1:8000/health
+
+# Verify (1:1) — dua frame: netral + setelah gerakan challenge
+curl -X POST http://127.0.0.1:8000/api/face/verify `
+  -H "X-API-Key: <api-key>" `
+  -F "nik=12345" -F "challenge=smile" `
+  -F "file_a=@netral.jpg" -F "file_b=@senyum.jpg"
+```
+
+Dokumentasi interaktif: <http://127.0.0.1:8000/docs>
+
+Jalankan self-check logika pencocokan:
+
+```powershell
+venv\Scripts\python.exe test_face.py
+```
+
+---
+
+## B. Server Deployment (Debian + PM2)
+
+### 1. Sistem & ODBC Driver
+
+```bash
+sudo apt update
+sudo apt install -y python3.11 python3.11-venv curl gnupg
+
+# Repositori Microsoft (ganti 12 dengan versi Debian Anda)
+curl -sSL https://packages.microsoft.com/keys/microsoft.asc \
+  | sudo tee /etc/apt/trusted.gpg.d/microsoft.asc > /dev/null
+curl -sSL https://packages.microsoft.com/config/debian/12/prod.list \
+  | sudo tee /etc/apt/sources.list.d/mssql-release.list
+
+sudo apt update
+sudo ACCEPT_EULA=Y apt install -y msodbcsql18 unixodbc-dev
+```
+
+Verifikasi driver terdaftar:
+
+```bash
+odbcinst -q -d
+```
+
+Sesuaikan nama driver di `.env` dengan hasil perintah di atas
+(`{ODBC Driver 18 for SQL Server}`), termasuk `TrustServerCertificate=yes;`
+bila perlu.
+
+### 2. Deploy kode
+
+```bash
+sudo mkdir -p /opt/face-api && sudo chown $USER:$USER /opt/face-api
+cd /opt/face-api
+# salin kode ke sini (git clone / rsync)
+
+python3.11 -m venv venv
+source venv/bin/activate
+```
+
+### 3. Install dependensi — **pakai wheel CPU-only**
+
+```bash
+# torch versi default di Linux menarik dependensi CUDA (~2 GB) yang tidak
+# terpakai di server tanpa GPU. Install wheel CPU dulu, baru sisanya.
+pip install torch==2.2.2 torchvision==0.17.2 \
+  --index-url https://download.pytorch.org/whl/cpu
+
+pip install -r requirements.txt
+```
+
+Urutannya penting: `torch` yang sudah terpasang tidak akan ditimpa oleh
+`requirements.txt` karena versinya sama persis.
+
+### 4. Konfigurasi
+
+```bash
+cp .env.example .env
+nano .env          # isi DB_DSN dan API_KEY (sama dengan yang di config Lumen)
+chmod 600 .env     # berisi kredensial DB, jangan world-readable
+```
+
+### 5. Pre-download bobot model
+
+Lakukan **sebelum** `pm2 start`. Kalau tidak, unduhan 100 MB terjadi saat
+startup pertama di bawah PM2 dan mudah disalahartikan sebagai proses hang:
+
+```bash
+source venv/bin/activate
+python -c "from facenet_pytorch import InceptionResnetV1; InceptionResnetV1(pretrained='vggface2')"
+```
+
+### 6. PM2
+
+`ecosystem.config.js`:
+
+```js
+module.exports = {
+  apps: [{
+    name: "face-api",
+    cwd: "/opt/face-api",
+    script: "venv/bin/python",
+    args: "-m uvicorn app.main:app --host 127.0.0.1 --port 8000",
+    interpreter: "none",          // script sudah executable, jangan lewat node
+    instances: 1,                 // WAJIB 1 — lihat catatan di bawah
+    autorestart: true,
+    max_memory_restart: "2G",
+    error_file: "/var/log/face-api/error.log",
+    out_file: "/var/log/face-api/out.log",
+  }]
+};
+```
+
+```bash
+sudo mkdir -p /var/log/face-api && sudo chown $USER:$USER /var/log/face-api
+
+pm2 start ecosystem.config.js
+pm2 save
+pm2 startup        # jalankan perintah yang ditampilkan agar survive reboot
+```
+
+> **`instances: 1` bukan opsional.** Cache embedding hidup di memori proses.
+> Dengan 2 worker atau lebih, enroll di worker A tidak terlihat oleh worker B
+> sampai restart — karyawan yang baru didaftarkan akan gagal dikenali secara
+> acak, tergantung worker mana yang kebagian request. Cluster mode PM2 juga
+> tidak berlaku untuk proses Python.
+
+### 7. Verifikasi
+
+```bash
+pm2 logs face-api --lines 50
+curl http://127.0.0.1:8000/health
+```
+
+`faces_loaded` harus sama dengan jumlah baris di `karyawan_vector`. Kalau `0`
+padahal tabel berisi, artinya koneksi DB gagal saat startup — cek log.
+
+---
+
+## Keamanan Jaringan
+
+Service ini **bind ke `127.0.0.1`**, jadi tidak terjangkau dari luar server.
+
+- **Lumen satu server dengan Python:** selesai, tidak ada yang perlu dibuka.
+- **Lumen di server berbeda:** ubah bind ke `0.0.0.0` lalu batasi di firewall —
+  jangan mengandalkan API key sendirian.
+
+  ```bash
+  sudo ufw allow from <IP-server-lumen> to any port 8000 proto tcp
+  ```
+
+Jangan pernah menaruh service ini langsung di internet. Endpoint `/verify`
+menerima gambar sembarang dan mengonfirmasi identitas karyawan — terbuka
+berarti siapa pun bisa menjadikannya oracle untuk menguji wajah terhadap NIK.
+
+---
+
+## Batas Ukuran Upload
+
+Gambar melewati tiga hop. Batasnya harus dinaikkan di **semua** titik, bukan satu:
+
+| Titik | Setting |
+|---|---|
+| Nginx (depan Laravel & Lumen) | `client_max_body_size 10M;` |
+| PHP (Laravel & Lumen) | `upload_max_filesize`, `post_max_size` |
+| Python | `MAX_UPLOAD_BYTES` di `.env` |
+
+Kalau salah satu ketinggalan, gejalanya membingungkan: upload gagal dengan
+error generik di hop yang sama sekali tidak menyebut ukuran file.
+
+---
+
+## Update Kode
+
+```bash
+cd /opt/face-api
+git pull
+source venv/bin/activate
+pip install -r requirements.txt      # hanya bila requirements berubah
+pm2 restart face-api
+```
+
+Restart memuat ulang model (~2-5 detik) dan seluruh cache vektor dari DB.
+Selama jendela itu request akan gagal — lakukan di luar jam absensi.
+
+---
+
+## Troubleshooting
+
+| Gejala | Penyebab |
+|---|---|
+| `Can't open lib ... file not found` | ODBC driver belum terinstall / nama driver di `DSN` salah |
+| `SSL Provider: certificate verify failed` | Driver 18 tanpa `TrustServerCertificate=yes;` |
+| `/health` → `faces_loaded: 0` | Koneksi DB gagal saat startup, atau `karyawan_vector` memang kosong |
+| Karyawan baru kadang dikenali kadang tidak | PM2 jalan lebih dari 1 instance |
+| Startup pertama seperti hang | Sedang mengunduh bobot model — cek `pm2 logs` |
+| Semua wajah `matched: false` | `MATCH_THRESHOLD` terlalu tinggi — cek juga apakah ada yang menyalin `0.83` dari referensi |
+| Orang salah lolos verifikasi | `MATCH_THRESHOLD` terlalu rendah — naikkan bertahap |
+| `reason: "not_enrolled"` | NIK belum pernah di-enroll, atau cache belum ter-refresh |
+| `reason: "liveness_failed"` terus-menerus | Ambang gerakan tidak cocok dengan resolusi kamera — lihat Kalibrasi Liveness |
+
+### Kalibrasi Threshold
+
+> **`MATCH_THRESHOLD` adalah cosine similarity, bukan euclidean distance.**
+> Implementasi referensi (`workspace-face-fr`) memakai euclidean `0.83` dengan
+> arah perbandingan terbalik. **Jangan menyalin angka 0.83 ke sini** — itu
+> setara euclidean `0.58`, jauh lebih ketat, dan karyawan sah akan ditolak
+> massal. Konversinya: `cosine = 1 − d² / 2`, jadi `d < 0.83` ⟺ `cos > 0.6556`
+> (nilai default sekarang). `test_face.py` akan gagal kalau aturan ini dilanggar.
+
+`0.6556` diwarisi dari kalibrasi referensi — titik awal yang wajar, **bukan
+nilai final untuk lingkungan Anda**. Kumpulkan ~20 foto uji dengan kamera dan
+pencahayaan yang sebenarnya dipakai, panggil `/verify`, dan amati `score`:
+
+- Skor untuk **orang yang benar** biasanya berkumpul di atas ~0.7
+- Skor untuk **orang yang salah** biasanya di bawah ~0.5
+
+Ambil threshold di lembah antara dua kelompok itu. Kondisi lapangan (kamera
+murah, backlight, karyawan berkacamata) menggeser angka ini — model di atas
+kertas tidak bisa menebaknya untuk Anda.
+
+### Kalibrasi Liveness
+
+Ambang liveness ada di `app/face.py` (`check_liveness`), disalin apa adanya dari
+referensi: pelebaran mulut **>3%** untuk `smile`, selisih yaw **8 piksel** untuk
+`look_left`/`look_right`. Ambang piksel bergantung resolusi frame — kalau
+resolusi kamera Anda jauh berbeda dari yang dipakai saat referensi dikalibrasi,
+angka 8 itu perlu diuji ulang. Terlalu kecil: foto yang digoyang lolos. Terlalu
+besar: karyawan harus menoleh berlebihan.
