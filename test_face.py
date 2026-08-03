@@ -93,8 +93,43 @@ def test_liveness():
     assert not face.check_liveness(netral, senyum, "menari")
 
 
+def test_health_db_tidak_bocorkan_kredensial():
+    """/health/db publik — kegagalan tidak boleh menampilkan isi DB_DSN.
+
+    Pesan error pyodbc bisa memuat host, user, bahkan potongan connection
+    string. Endpoint ini tanpa auth, jadi hanya SQLSTATE yang boleh keluar.
+    """
+    import pyodbc
+    from fastapi.testclient import TestClient
+
+    from app import main
+
+    rahasia = "Saku3@ws1979Sql"
+    pesan = f"[08001] TCP Provider: gagal konek ke 52.220.100.190 UID=sa;PWD={rahasia}"
+
+    def connect_gagal(*args, **kwargs):
+        raise pyodbc.Error("08001", pesan)
+
+    asli = pyodbc.connect
+    pyodbc.connect = connect_gagal
+    try:
+        # TestClient tanpa `with` sengaja tidak menjalankan lifespan, jadi
+        # model dan cache DB tidak ikut dimuat saat tes.
+        resp = TestClient(main.app).get("/health/db")
+    finally:
+        pyodbc.connect = asli
+
+    assert resp.status_code == 503, resp.status_code
+    assert resp.json() == {"connected": False, "sqlstate": "08001"}
+    # Yang paling penting: tidak ada jejak kredensial atau IP di respons
+    assert rahasia not in resp.text
+    assert "52.220.100.190" not in resp.text
+    assert "PWD" not in resp.text
+
+
 if __name__ == "__main__":
     test_similarity()
     test_kesetaraan_threshold()
     test_liveness()
+    test_health_db_tidak_bocorkan_kredensial()
     print("OK")

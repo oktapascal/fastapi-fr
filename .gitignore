@@ -11,3 +11,5 @@ __pycache__/
 
 # Mengabaikan folder graphify-out di mana pun berada (root maupun sub-direktori)
 **/graphify-out/
+
+.agents

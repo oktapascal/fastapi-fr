@@ -291,6 +291,7 @@ Selama jendela itu request akan gagal — lakukan di luar jam absensi.
 |---|---|
 | `Can't open lib ... file not found` | ODBC driver belum terinstall / nama driver di `DSN` salah |
 | `SSL Provider: certificate verify failed` | Driver 18 tanpa `TrustServerCertificate=yes;` |
+| `TCP Provider: Error code 0x2746 (10054)` saat connect — jalan di Windows, gagal di Debian | Kebijakan TLS OpenSSL di Debian — lihat di bawah |
 | `/health` → `faces_loaded: 0` | Koneksi DB gagal saat startup, atau `karyawan_vector` memang kosong |
 | Karyawan baru kadang dikenali kadang tidak | PM2 jalan lebih dari 1 instance |
 | Startup pertama seperti hang | Sedang mengunduh bobot model — cek `pm2 logs` |
@@ -298,6 +299,82 @@ Selama jendela itu request akan gagal — lakukan di luar jam absensi.
 | Orang salah lolos verifikasi | `MATCH_THRESHOLD` terlalu rendah — naikkan bertahap |
 | `reason: "not_enrolled"` | NIK belum pernah di-enroll, atau cache belum ter-refresh |
 | `reason: "liveness_failed"` terus-menerus | Ambang gerakan tidak cocok dengan resolusi kamera — lihat Kalibrasi Liveness |
+
+### Error 10054 di Debian (jalan di Windows lokal)
+
+```
+pyodbc.OperationalError: ('08001', '[08001] [Microsoft][ODBC Driver 17 for SQL Server]
+TCP Provider: Error code 0x2746 (10054) (SQLDriverConnect)')
+```
+
+`10054` = koneksi diputus paksa oleh server, **bukan** timeout. TCP-nya sudah
+nyambung; yang gagal adalah TLS handshake. SQL Server selalu mengenkripsi paket
+login, jadi handshake tetap terjadi walau `Encrypt=no`.
+
+Penyebabnya beda TLS stack: Windows memakai SChannel yang permisif, Debian 12
+memakai OpenSSL 3.x dengan `SECLEVEL=2` + `MinProtocol=TLSv1.2` di
+`/etc/ssl/openssl.cnf`. Sertifikat self-signed SQL Server 2019 (SHA-1 / RSA
+1024) ditolak OpenSSL sebelum sempat divalidasi.
+
+`TrustServerCertificate=yes` **tidak menolong** — flag itu melewati validasi
+trust chain, yang baru berjalan *setelah* handshake sukses.
+
+`Encrypt=yes` adalah **pemicu**, bukan akar masalah: `.env` lokal memakai flag
+yang sama dan jalan normal di Windows. Flag itu menaikkan cakupan TLS dari
+"hanya paket login" ke "seluruh koneksi", dan negosiasi penuh itulah yang
+ditolak OpenSSL Debian.
+
+Kerjakan berurutan, berhenti di langkah yang berhasil.
+
+**1. Pastikan bukan masalah jaringan** (harus `succeeded`):
+
+```bash
+nc -vz <ip-sql-server> 8282
+```
+
+Untuk membaca SQLSTATE-nya tanpa mengulik log, service menyediakan `GET
+/health/db` (tanpa auth, terpisah dari `/health`):
+
+```bash
+curl -i http://127.0.0.1:3000/health/db
+# 200 {"connected":true}
+# 503 {"connected":false,"sqlstate":"08001"}  <- gagal konek / TLS
+# 503 {"connected":false,"sqlstate":"28000"}  <- kredensial salah
+```
+
+Pesan driver lengkap sengaja tidak dikembalikan (memuat IP & versi driver);
+lihat `pm2 logs` untuk detailnya. Endpoint ini membuka koneksi sungguhan —
+jangan dipakai sebagai target liveness check, pakai `/health` untuk itu.
+
+**2. Turunkan cakupan TLS** — hapus `Encrypt=yes;TrustServerCertificate=yes`
+dari `DB_DSN` di `.env`, lalu `pm2 restart face-api`. Driver 17 default-nya
+`Encrypt=no` (hanya paket login yang dienkripsi). Kalau ini menyelesaikan
+masalah, `openssl.cnf` tidak perlu disentuh sama sekali.
+
+**3. Kalau masih `10054`** — handshake login-only pun ditolak. Longgarkan
+kebijakan OpenSSL di `/etc/ssl/openssl.cnf`:
+
+```ini
+[openssl_init]
+ssl_conf = ssl_sect
+
+[ssl_sect]
+system_default = system_default_sect
+
+[system_default_sect]
+CipherString = DEFAULT@SECLEVEL=0
+MinProtocol = TLSv1
+```
+
+Lalu `pm2 restart face-api` (OpenSSL baca config saat proses start, tidak perlu
+reboot).
+
+> **Utang teknis — keduanya menukar keamanan dengan kemudahan.** DB diakses
+> lewat IP publik. Langkah 2 membuat seluruh query dan hasilnya (NIK, vektor
+> wajah) melintas **plaintext di internet**; langkah 3 melemahkan TLS untuk
+> semua proses di server. Solusi permanennya di sisi SQL Server: pasang
+> sertifikat RSA-2048/SHA-256, aktifkan TLS 1.2, lalu kembalikan `Encrypt=yes`
+> dan `SECLEVEL=2`. Butuh koordinasi dengan pemegang server SQL.
 
 ### Kalibrasi Threshold
 
