@@ -65,7 +65,11 @@ Copy-Item .env.example .env
 Isi `.env`:
 
 ```ini
-DB_DSN=DRIVER={ODBC Driver 17 for SQL Server};SERVER=52.220.100.190,8282;DATABASE=dbproduk;UID=user;PWD=password
+DB_HOST1=52.220.100.190
+DB_PORT1=8282
+DB_NAME1=dbproduk
+DB_USER1=user
+DB_PASSWORD1=password
 API_KEY=string-acak-panjang
 MATCH_THRESHOLD=0.6556
 MAX_UPLOAD_BYTES=5242880
@@ -176,7 +180,7 @@ dari PyPI tanpa pin `+cpu`.
 
 ```bash
 cp .env.example .env
-nano .env          # isi DB_DSN dan API_KEY (sama dengan yang di config Lumen)
+nano .env          # isi DB_* dan API_KEY (API_KEY sama dengan di config Lumen)
 chmod 600 .env     # berisi kredensial DB, jangan world-readable
 ```
 

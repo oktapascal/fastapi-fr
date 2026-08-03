@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from . import face
 from .config import settings
+from .db import db
 from .routes import router
 
 logger = logging.getLogger(__name__)
@@ -25,8 +26,7 @@ async def lifespan(app: FastAPI):
     """
     face.load_models()
     try:
-        # timeout: tanpa ini startup menggantung saat host DB tidak menjawab
-        conn = pyodbc.connect(settings.db_dsn, timeout=5)
+        conn = db.connect()
         try:
             face.refresh_cache(conn)
         finally:
@@ -75,9 +75,7 @@ def health_db():
     Detail lengkap masuk log (`pm2 logs`).
     """
     try:
-        # timeout wajib — tanpa ini connect ke host mati menggantung 15-30 detik
-        # dan endpoint publik ini jadi alat penghabis worker.
-        conn = pyodbc.connect(settings.db_dsn, timeout=5)
+        conn = db.connect()
         try:
             # Bukan sekadar connect: pastikan sesi benar-benar bisa dipakai.
             conn.execute("SELECT 1").fetchone()

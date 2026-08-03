@@ -4,9 +4,14 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """Konfigurasi dibaca dari file .env."""
 
-    # Connection string ODBC, contoh:
-    # DRIVER={ODBC Driver 17 for SQL Server};SERVER=host,port;DATABASE=dbproduk;UID=user;PWD=pass
-    db_dsn: str
+    # Koneksi SQL Server, dipecah per komponen (bukan satu connection string)
+    # agar seragam dengan proyek lain di server ini: fastapi-simkug & fastapi-sima.
+    # Sufiks angka mengikuti konvensi yang sama, walau di sini hanya ada satu DB.
+    db_host1: str
+    db_port1: str = "8282"
+    db_name1: str
+    db_user1: str
+    db_password1: str
 
     # Shared secret dengan Lumen (core API)
     api_key: str

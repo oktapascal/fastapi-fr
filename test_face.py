@@ -94,7 +94,7 @@ def test_liveness():
 
 
 def test_health_db_tidak_bocorkan_kredensial():
-    """/health/db publik — kegagalan tidak boleh menampilkan isi DB_DSN.
+    """/health/db publik — kegagalan tidak boleh membocorkan kredensial DB.
 
     Pesan error pyodbc bisa memuat host, user, bahkan potongan connection
     string. Endpoint ini tanpa auth, jadi hanya SQLSTATE yang boleh keluar.
