@@ -15,13 +15,24 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Muat model dan cache vektor sekali di awal, bukan per-request."""
+    """Muat model dan cache vektor sekali di awal, bukan per-request.
+
+    Kegagalan DB tidak mematikan proses. Service tetap naik dengan cache kosong
+    supaya /health/db bisa dipakai mendiagnosis penyebabnya, dan supaya PM2
+    tidak masuk restart-loop selama DB bermasalah. Konsekuensinya semua
+    verifikasi menjawab not_enrolled sampai cache terisi — persis perilaku yang
+    sudah didokumentasikan (`faces_loaded: 0` saat koneksi DB gagal).
+    """
     face.load_models()
-    conn = pyodbc.connect(settings.db_dsn)
     try:
-        face.refresh_cache(conn)
-    finally:
-        conn.close()
+        # timeout: tanpa ini startup menggantung saat host DB tidak menjawab
+        conn = pyodbc.connect(settings.db_dsn, timeout=5)
+        try:
+            face.refresh_cache(conn)
+        finally:
+            conn.close()
+    except pyodbc.Error:
+        logger.exception("Cache vektor gagal dimuat; service naik dengan cache kosong")
     yield
 
 
