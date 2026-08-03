@@ -307,33 +307,57 @@ pyodbc.OperationalError: ('08001', '[08001] [Microsoft][ODBC Driver 17 for SQL S
 TCP Provider: Error code 0x2746 (10054) (SQLDriverConnect)')
 ```
 
-`10054` = koneksi diputus paksa oleh server, **bukan** timeout. TCP-nya sudah
-nyambung; yang gagal adalah TLS handshake. SQL Server selalu mengenkripsi paket
-login, jadi handshake tetap terjadi walau `Encrypt=no`.
+`10054` = koneksi diputus paksa oleh peer, **bukan** timeout. TCP-nya sudah
+nyambung; yang gagal adalah TLS handshake.
 
-Penyebabnya beda TLS stack: Windows memakai SChannel yang permisif, Debian 12
-memakai OpenSSL 3.x dengan `SECLEVEL=2` + `MinProtocol=TLSv1.2` di
-`/etc/ssl/openssl.cnf`. Sertifikat self-signed SQL Server 2019 (SHA-1 / RSA
-1024) ditolak OpenSSL sebelum sempat divalidasi.
+**Penyebab (sudah dikonfirmasi di server produksi):** kebijakan TLS OpenSSL
+Debian menolak sertifikat instance `dbproduk`. Server memakai OpenSSL 1.1.1w
+dengan `MinProtocol = TLSv1.2` dan `CipherString = DEFAULT@SECLEVEL=2` di
+`/etc/ssl/openssl.cnf`. Windows memakai SChannel yang lebih permisif, karena
+itu DSN yang sama jalan di lokal.
 
-`TrustServerCertificate=yes` **tidak menolong** — flag itu melewati validasi
-trust chain, yang baru berjalan *setelah* handshake sukses.
+Dua hal yang **sudah diuji dan terbukti BUKAN penyebabnya** — jangan diulang:
 
-`Encrypt=yes` adalah **pemicu**, bukan akar masalah: `.env` lokal memakai flag
-yang sama dan jalan normal di Windows. Flag itu menaikkan cakupan TLS dari
-"hanya paket login" ke "seluruh koneksi", dan negosiasi penuh itulah yang
-ditolak OpenSSL Debian.
+| Dugaan | Hasil uji |
+|---|---|
+| `Encrypt=yes;TrustServerCertificate=yes` di DSN | Dihapus, tetap `10054`. SQL Server selalu meng-TLS-kan paket login, jadi handshake terjadi walau `Encrypt=no`. `TrustServerCertificate` hanya melewati validasi trust chain, yang berjalan *setelah* handshake sukses. |
+| Firewall / security group AWS | TCP ke `52.220.100.190:8282` sukses (`/dev/tcp`). Driver & unixODBC juga sehat — koneksi ke instance lain (`dbsima:1433`) jalan normal dari server yang sama. |
 
-Kerjakan berurutan, berhenti di langkah yang berhasil.
+#### Diagnosis
 
-**1. Pastikan bukan masalah jaringan** (harus `succeeded`):
+`nc` tidak terpasang di server; bash punya `/dev/tcp` bawaan:
 
 ```bash
-nc -vz <ip-sql-server> 8282
+timeout 5 bash -c 'cat < /dev/null > /dev/tcp/<ip>/<port>' && echo OK || echo GAGAL
 ```
 
-Untuk membaca SQLSTATE-nya tanpa mengulik log, service menyediakan `GET
-/health/db` (tanpa auth, terpisah dari `/health`):
+Kalau TCP OK, uji kebijakan TLS **per-proses** lewat `OPENSSL_CONF` — tidak ada
+file sistem yang berubah, jadi tidak perlu rollback:
+
+```bash
+cat > /tmp/t.cnf <<'EOF'
+openssl_conf = default_conf
+[default_conf]
+ssl_conf = ssl_sect
+[ssl_sect]
+system_default = system_default_sect
+[system_default_sect]
+CipherString = DEFAULT@SECLEVEL=1
+MinProtocol = TLSv1.2
+EOF
+
+OPENSSL_CONF=/tmp/t.cnf python -c "import pyodbc; pyodbc.connect('<DSN>', timeout=5).close(); print('OK')"
+```
+
+Naik-turunkan `SECLEVEL` (2→1→0) dan `MinProtocol` (TLSv1.2→TLSv1.1→TLSv1)
+**satu per satu** untuk menemukan pelonggaran terkecil yang cukup. `SECLEVEL=1`
+masih menolak cipher di bawah 80-bit; `SECLEVEL=0` menerima apa saja. Jangan
+langsung ke 0 kalau 1 sudah cukup.
+
+Hapus `/tmp/t.cnf` setelah selesai bila DSN-nya sempat ditulis ke file.
+
+Cek cepat tanpa mengulik log — `GET /health/db` (tanpa auth, terpisah dari
+`/health`):
 
 ```bash
 curl -i http://127.0.0.1:3000/health/db
@@ -343,38 +367,27 @@ curl -i http://127.0.0.1:3000/health/db
 ```
 
 Pesan driver lengkap sengaja tidak dikembalikan (memuat IP & versi driver);
-lihat `pm2 logs` untuk detailnya. Endpoint ini membuka koneksi sungguhan —
-jangan dipakai sebagai target liveness check, pakai `/health` untuk itu.
+lihat `pm2 logs`. Endpoint ini membuka koneksi sungguhan — jangan dipakai
+sebagai target liveness check, pakai `/health` untuk itu.
 
-**2. Turunkan cakupan TLS** — hapus `Encrypt=yes;TrustServerCertificate=yes`
-dari `DB_DSN` di `.env`, lalu `pm2 restart face-api`. Driver 17 default-nya
-`Encrypt=no` (hanya paket login yang dienkripsi). Kalau ini menyelesaikan
-masalah, `openssl.cnf` tidak perlu disentuh sama sekali.
+#### Perbaikan
 
-**3. Kalau masih `10054`** — handshake login-only pun ditolak. Longgarkan
-kebijakan OpenSSL di `/etc/ssl/openssl.cnf`:
+Terapkan nilai terkecil yang lolos uji di atas ke `/etc/ssl/openssl.cnf`, lalu
+`pm2 restart face-api` (OpenSSL baca config saat proses start, tidak perlu
+reboot):
 
 ```ini
-[openssl_init]
-ssl_conf = ssl_sect
-
-[ssl_sect]
-system_default = system_default_sect
-
 [system_default_sect]
-CipherString = DEFAULT@SECLEVEL=0
-MinProtocol = TLSv1
+CipherString = DEFAULT@SECLEVEL=1
+MinProtocol = TLSv1.2
 ```
 
-Lalu `pm2 restart face-api` (OpenSSL baca config saat proses start, tidak perlu
-reboot).
-
-> **Utang teknis — keduanya menukar keamanan dengan kemudahan.** DB diakses
-> lewat IP publik. Langkah 2 membuat seluruh query dan hasilnya (NIK, vektor
-> wajah) melintas **plaintext di internet**; langkah 3 melemahkan TLS untuk
-> semua proses di server. Solusi permanennya di sisi SQL Server: pasang
-> sertifikat RSA-2048/SHA-256, aktifkan TLS 1.2, lalu kembalikan `Encrypt=yes`
-> dan `SECLEVEL=2`. Butuh koordinasi dengan pemegang server SQL.
+> **Utang teknis.** Pelonggaran ini berlaku untuk **seluruh proses di server**,
+> bukan hanya koneksi DB. Solusi sebenarnya ada di sisi instance `dbproduk`:
+> pasang sertifikat RSA-2048/SHA-256 dan aktifkan TLS 1.2, lalu kembalikan
+> `SECLEVEL=2` + `MinProtocol=TLSv1.2` dan tambahkan `Encrypt=yes` di DSN.
+> Tanpa itu, vektor wajah dan NIK melintas ke IP publik tanpa enkripsi sesi.
+> Butuh koordinasi dengan pemegang server SQL.
 
 ### Kalibrasi Threshold
 
