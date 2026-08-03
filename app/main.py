@@ -6,9 +6,8 @@ import pyodbc
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 
-from . import face
+from . import db, face
 from .config import settings
-from .db import db
 from .routes import router
 
 logger = logging.getLogger(__name__)
