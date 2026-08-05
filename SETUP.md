@@ -1,8 +1,13 @@
 # Setup Guide — Face Recognition Service
 
-Layanan ini hanya menjawab satu pertanyaan: *"benarkah wajah ini milik NIK
-tersebut?"* — verifikasi **1:1**, bukan pencarian 1:N. Lumen mengirim NIK
-beserta dua frame wajah; service memeriksa liveness lalu mencocokkan.
+Layanan ini menjawab dua pertanyaan, keduanya setelah liveness check dua frame:
+
+- `/verify` — *"benarkah wajah ini milik NIK tersebut?"* Verifikasi **1:1**,
+  Lumen mengirim NIK. Ini jalur utama untuk karyawan yang sudah login.
+- `/identify` — *"wajah ini milik siapa?"* Pencarian **1:N**, tanpa NIK sebagai
+  input. Khusus perangkat bersama tanpa login (kiosk); ambangnya perlu lebih
+  tinggi daripada 1:1.
+
 Dipanggil oleh Lumen (core API), tidak pernah oleh browser secara langsung.
 
 ```

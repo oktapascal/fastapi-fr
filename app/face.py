@@ -135,3 +135,20 @@ def similarity(nik: str, vec: np.ndarray) -> float | None:
     if tersimpan is None:
         return None
     return float(tersimpan @ vec)
+
+
+def identify(vec: np.ndarray) -> tuple[str, float] | None:
+    """Cari NIK dengan similarity tertinggi — pencarian 1:N.
+
+    Mengembalikan None hanya bila cache kosong. Selain itu SELALU ada kandidat
+    terbaik, sedekat apa pun: penyaringan terhadap threshold adalah tugas
+    pemanggil, bukan fungsi ini.
+
+    ponytail: scan linear atas dict, cukup untuk ribuan karyawan. Kalau jumlah
+    wajah membengkak, tumpuk vektor jadi satu matriks (N, 512) dan ganti loop
+    ini dengan satu perkalian matriks.
+    """
+    if not _vectors:
+        return None
+    nik = max(_vectors, key=lambda k: _vectors[k] @ vec)
+    return nik, float(_vectors[nik] @ vec)

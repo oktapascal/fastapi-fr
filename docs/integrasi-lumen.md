@@ -263,7 +263,120 @@ pengecekan `flag_aktif` di Lumen. Hapus vektornya juga.
 
 ---
 
-## 6. Konfigurasi
+## 6. Identifikasi 1:N (`/identify`) — Mode Kiosk
+
+Endpoint kedua di service Python. Bedanya dengan `/verify` hanya satu hal, tapi
+hal itu mengubah seluruh model keamanannya:
+
+| | `/verify` (1:1) | `/identify` (1:N) |
+|---|---|---|
+| NIK | dikirim Lumen, dari klaim JWT | **dikembalikan** Python |
+| Identitas ditentukan oleh | token | model |
+| Dipakai untuk | absensi user yang sudah login | perangkat bersama tanpa login |
+
+### Kapan `/identify` **tidak** boleh dipakai
+
+Kalau request datang dengan JWT user, pakai `/verify`. Selalu.
+
+Menggunakan `/identify` di alur yang punya token, lalu mencocokkan NIK hasilnya
+dengan NIK di token, terdengar seperti pengetatan — padahal hasilnya justru
+lebih lemah daripada `/verify` biasa: keputusannya kini bergantung pada
+kandidat terbaik dari seluruh basis wajah, bukan pada satu perbandingan.
+Menambah pemeriksaan setelahnya tidak mengembalikan jaminan yang sudah hilang.
+
+`/identify` hanya masuk akal ketika memang **tidak ada identitas yang diklaim**:
+tablet absensi bersama di lobi, karyawan tinggal datang dan menghadap kamera.
+
+### Otorisasi: perangkat, bukan user
+
+Tanpa JWT user, yang harus diautentikasi adalah **perangkatnya**. Token perangkat
+terikat ke satu `kode_lokasi`, di-issue saat kiosk didaftarkan, dan bisa dicabut.
+
+```php
+public function absenKiosk(Request $request)
+{
+    $this->validate($request, [
+        'challenge' => 'required|in:smile,look_left,look_right',
+        'file_a'    => 'required|image|max:5120',
+        'file_b'    => 'required|image|max:5120',
+    ]);
+
+    // Lokasi datang dari pendaftaran perangkat, BUKAN dari input request.
+    $perangkat = $this->perangkatDariToken($request->bearerToken());
+    if (!$perangkat) {
+        return response()->json(['status' => 'error', 'message' => 'Perangkat tidak dikenal.'], 401);
+    }
+
+    $response = Http::withHeaders(['X-API-Key' => env('FACE_API_KEY')])
+        ->connectTimeout(5)
+        ->timeout(15)
+        ->attach('file_a', file_get_contents($request->file('file_a')), 'a.jpg')
+        ->attach('file_b', file_get_contents($request->file('file_b')), 'b.jpg')
+        ->post(env('FACE_SERVICE_URL') . '/api/face/identify', [
+            'challenge' => $request->input('challenge'),
+        ]);
+```
+
+Respons Python sama bentuknya dengan `/verify`, ditambah `nik` yang **hanya
+terisi saat `matched: true`**:
+
+```json
+{ "matched": true,  "nik": "12345", "score": 0.9134, "reason": null }
+{ "matched": false, "nik": null,    "score": 0.4210, "reason": "face_mismatch" }
+{ "matched": false, "nik": null,    "score": null,   "reason": "liveness_failed" }
+```
+
+Saat gagal cocok, NIK kandidat terdekat sengaja tidak dikembalikan — kalau
+dikembalikan, endpoint ini menjadi alat untuk memetakan wajah ke NIK dengan
+gambar sembarang.
+
+### Validasi setelah identifikasi tetap wajib
+
+```php
+    $hasil = $response->json();
+    if (!$hasil['matched']) {
+        return response()->json([
+            'status'  => 'error',
+            'message' => match ($hasil['reason']) {
+                'liveness_failed' => 'Gerakan tidak terdeteksi. Ulangi sesuai instruksi.',
+                default           => 'Wajah tidak dikenali. Gunakan absensi manual.',
+            },
+        ], 200);
+    }
+
+    // Pencarian di Python TIDAK disaring per lokasi — cache vektor global.
+    // Filter kode_lokasi di sini yang menahan wajah dari cabang lain.
+    $karyawan = DB::table('hr_karyawan')
+        ->where('nik', $hasil['nik'])
+        ->where('kode_lokasi', $perangkat->kode_lokasi)
+        ->where('flag_aktif', 'Y')
+        ->first(['nik', 'nama']);
+
+    if (!$karyawan) {
+        return response()->json([
+            'status'  => 'error',
+            'message' => 'Karyawan tidak terdaftar di lokasi ini.',
+        ], 403);
+    }
+```
+
+Baris `kode_lokasi` itu bukan formalitas. `face.identify()` memindai **seluruh**
+vektor terdaftar tanpa memandang lokasi, jadi kandidat yang menang bisa saja
+karyawan cabang lain. Lumen adalah satu-satunya lapisan yang tahu kiosk ini
+berdiri di mana.
+
+### Ambang perlu lebih tinggi
+
+`MATCH_THRESHOLD` dikalibrasi untuk perbandingan 1:1. Pada 1:N, skor tertinggi
+diambil dari N kandidat — makin banyak wajah terdaftar, makin besar peluang ada
+orang lain yang kebetulan melewati ambang. Naikkan ambang untuk alur kiosk, dan
+ukur dengan data lapangan sebelum dipakai untuk keputusan absensi. Simpan
+`score` setiap percobaan; itu satu-satunya bahan kalibrasi yang tidak bisa
+direkonstruksi belakangan.
+
+---
+
+## 7. Konfigurasi
 
 ```ini
 # .env Lumen
@@ -294,3 +407,11 @@ ke IP server Lumen saja — jangan mengandalkan API key sendirian.
 - [ ] `liveness_failed` dicatat terpisah dan dipantau
 - [ ] Vektor wajah dihapus saat karyawan resign
 - [ ] `X-Request-Id` diteruskan ke Python dan masuk log
+
+Tambahan bila alur kiosk (`/identify`) dipakai:
+
+- [ ] Alur ber-JWT tetap memakai `/verify`, tidak pernah `/identify`
+- [ ] Kiosk diautentikasi dengan token perangkat yang bisa dicabut
+- [ ] `kode_lokasi` berasal dari pendaftaran perangkat, bukan dari input request
+- [ ] NIK hasil identifikasi divalidasi ulang ke `hr_karyawan` beserta `kode_lokasi`
+- [ ] Ambang untuk alur 1:N dinaikkan dan diukur dengan data lapangan

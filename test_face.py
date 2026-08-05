@@ -27,6 +27,25 @@ def test_similarity():
     assert face.similarity("A001", np.array([1, 0, 0], np.float32)) is None
 
 
+def test_identify():
+    """Pencarian 1:N: selalu mengembalikan kandidat terdekat, bukan keputusan."""
+    face._vectors = {
+        "A001": np.array([1, 0, 0], dtype=np.float32),
+        "A002": np.array([0, 1, 0], dtype=np.float32),
+    }
+
+    assert face.identify(np.array([0.9, 0.1, 0], np.float32))[0] == "A001"
+    assert face.identify(np.array([0.1, 0.9, 0], np.float32))[0] == "A002"
+
+    # Wajah asing tetap dapat kandidat dengan skor rendah — justru inilah alasan
+    # pemanggil wajib menyaring dengan threshold, bukan percaya nik-nya saja.
+    nik, score = face.identify(np.array([0, 0, 1], np.float32))
+    assert nik in ("A001", "A002") and score == 0.0
+
+    face._vectors = {}
+    assert face.identify(np.array([1, 0, 0], np.float32)) is None
+
+
 def test_kesetaraan_threshold():
     """Kunci konversi metrik terhadap implementasi referensi.
 
@@ -129,6 +148,7 @@ def test_health_db_tidak_bocorkan_kredensial():
 
 if __name__ == "__main__":
     test_similarity()
+    test_identify()
     test_kesetaraan_threshold()
     test_liveness()
     test_health_db_tidak_bocorkan_kredensial()

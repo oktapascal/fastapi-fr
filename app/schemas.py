@@ -22,3 +22,7 @@ class VerifyResponse(BaseModel):
     matched: bool
     score: float | None = None
     reason: Literal["liveness_failed", "face_mismatch", "not_enrolled"] | None = None
+    # Hanya terisi oleh /identify saat matched=True. Pada /verify selalu None
+    # (Lumen sudah tahu NIK-nya), dan saat gagal cocok juga None — mengembalikan
+    # kandidat terdekat pada wajah asing akan menjadikan endpoint ini oracle.
+    nik: str | None = None

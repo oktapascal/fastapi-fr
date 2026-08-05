@@ -219,6 +219,51 @@ harus diubah setiap kali kata-katanya disesuaikan.
 
 ---
 
+## 5. Varian Kiosk (tanpa login)
+
+Alur di atas mengasumsikan karyawan sudah login, sehingga identitasnya dibawa
+JWT. Untuk **tablet absensi bersama di lobi** tidak ada login: karyawan datang,
+menghadap kamera, selesai. Lumen memakai endpoint `/identify` untuk kasus ini —
+lihat [`integrasi-lumen.md`](integrasi-lumen.md#6-identifikasi-1n-identify--mode-kiosk).
+
+Yang berubah di sisi Laravel hanya dua hal:
+
+```php
+// 1. Rute kiosk terpisah, TIDAK di dalam middleware 'auth'
+Route::middleware('kiosk')->group(function () {
+    Route::get('/kiosk/challenge',  [KioskController::class, 'challenge']);
+    Route::post('/kiosk/absensi',   [KioskController::class, 'absensi']);
+});
+
+// 2. Yang diteruskan adalah token perangkat, bukan JWT user
+$response = Http::withToken(config('services.kiosk.token'))
+    ->timeout(20)
+    ->connectTimeout(5)
+    // ... attach file_a, file_b, challenge — sama persis dengan alur biasa
+    ->post(config('services.lumen.url') . '/api/absensi/kiosk');
+```
+
+Sisanya identik: challenge tetap diacak `random_int()` di server, tetap disimpan
+di session dengan TTL, tetap sekali pakai, dan nilai dari request body tetap
+diabaikan. Justru di mode kiosk aturan itu makin penting — perangkatnya berdiri
+di area publik dan siapa pun bisa menyentuhnya.
+
+### Dua aturan yang mudah dilanggar
+
+**Jangan pakai jalur kiosk untuk user yang sudah login.** Kalau session user
+ada, pakai alur biasa. Mengidentifikasi ulang wajah orang yang identitasnya
+sudah dijamin token adalah pemeriksaan yang lebih lemah, bukan lebih ketat.
+
+**Jangan pernah menampilkan daftar kandidat.** Lumen hanya mengembalikan nama
+ketika wajah benar-benar cocok. Kalau gagal, tampilkan pesan generik dan arahkan
+ke absensi manual — jangan menampilkan "mungkin maksud Anda ...".
+
+Token kiosk disimpan di `.env` Laravel dan terikat pada satu lokasi. Perangkat
+yang hilang berarti token itu harus dicabut di Lumen — pastikan prosedurnya ada
+sebelum kiosk pertama dipasang.
+
+---
+
 ## Checklist
 
 - [ ] Challenge diacak dengan `random_int()` di server
@@ -230,3 +275,9 @@ harus diubah setiap kali kata-katanya disesuaikan.
 - [ ] `X-Request-Id` diteruskan
 - [ ] Tidak ada referensi ke service Python di seluruh kode Laravel
 - [ ] `upload_max_filesize` dan `post_max_size` cukup untuk dua frame sekaligus
+
+Tambahan bila varian kiosk dipakai:
+
+- [ ] Rute kiosk terpisah dari rute ber-`auth`, tidak saling memakai controller
+- [ ] Token kiosk terikat satu lokasi dan punya prosedur pencabutan
+- [ ] Kegagalan identifikasi menampilkan pesan generik, bukan daftar kandidat

@@ -30,6 +30,22 @@ def _read_image(file: UploadFile) -> Image.Image:
         raise HTTPException(400, "Format gambar tidak valid")
 
 
+def _embed_after_liveness(image_a, image_b, challenge: str):
+    """Cek liveness dua frame, lalu embed frame netral. None = liveness gagal.
+
+    Raises:
+        HTTPException: 422 bila wajah tidak terdeteksi di salah satu frame.
+    """
+    try:
+        landmarks_a = face.landmarks_of(image_a)
+        landmarks_b = face.landmarks_of(image_b)
+        if not face.check_liveness(landmarks_a, landmarks_b, challenge):
+            return None
+        return face.embed(image_a)  # embedding diambil dari frame netral
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
 @router.post("/enroll", response_model=EnrollResponse)
 def enroll(
     nik: str = Form(...),
@@ -102,19 +118,9 @@ def verify(
     if not face.is_enrolled(nik):
         return VerifyResponse(matched=False, reason="not_enrolled")
 
-    try:
-        landmarks_a = face.landmarks_of(image_a)
-        landmarks_b = face.landmarks_of(image_b)
-    except ValueError as e:
-        raise HTTPException(422, str(e))
-
-    if not face.check_liveness(landmarks_a, landmarks_b, challenge):
+    vec = _embed_after_liveness(image_a, image_b, challenge)
+    if vec is None:
         return VerifyResponse(matched=False, reason="liveness_failed")
-
-    try:
-        vec = face.embed(image_a)  # embedding diambil dari frame netral
-    except ValueError as e:
-        raise HTTPException(422, str(e))
 
     score = face.similarity(nik, vec)
     if score is None:
@@ -124,6 +130,44 @@ def verify(
         return VerifyResponse(matched=False, score=round(score, 4), reason="face_mismatch")
 
     return VerifyResponse(matched=True, score=round(score, 4))
+
+
+@router.post("/identify", response_model=VerifyResponse)
+def identify(
+    challenge: Challenge = Form(...),
+    file_a: UploadFile = File(..., description="Frame netral"),
+    file_b: UploadFile = File(..., description="Frame setelah gerakan challenge"),
+):
+    """Identifikasi 1:N — cari NIK pemilik wajah, tanpa NIK sebagai input.
+
+    Endpoint terpisah dari /verify, bukan `nik` opsional. Kalau `nik` dibuat
+    opsional, satu field yang lupa terkirim dari Lumen akan diam-diam mengubah
+    verifikasi 1:1 menjadi pencarian 1:N yang tetap membalas matched=true —
+    gagal terbuka tanpa sinyal error sama sekali.
+
+    Peringatan kalibrasi: MATCH_THRESHOLD dikalibrasi untuk 1:1. Pada 1:N,
+    peluang false accept naik seiring jumlah wajah terdaftar karena skor
+    tertinggi diambil dari N kandidat, bukan satu. Ambang untuk endpoint ini
+    umumnya perlu lebih tinggi — ukur dengan data lapangan sebelum dipakai
+    untuk keputusan absensi.
+    """
+    image_a = _read_image(file_a)
+    image_b = _read_image(file_b)
+
+    vec = _embed_after_liveness(image_a, image_b, challenge)
+    if vec is None:
+        return VerifyResponse(matched=False, reason="liveness_failed")
+
+    hasil = face.identify(vec)
+    if hasil is None:  # belum ada satu pun wajah terdaftar
+        return VerifyResponse(matched=False, reason="not_enrolled")
+
+    nik, score = hasil
+    if score < settings.match_threshold:
+        # NIK kandidat sengaja tidak dikembalikan saat gagal cocok.
+        return VerifyResponse(matched=False, score=round(score, 4), reason="face_mismatch")
+
+    return VerifyResponse(matched=True, nik=nik, score=round(score, 4))
 
 
 @router.delete("/{nik}")
