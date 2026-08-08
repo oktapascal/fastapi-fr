@@ -8,8 +8,3 @@ __pycache__/
 
 # Mengabaikan folder .claude beserta seluruh isinya di mana pun lokasinya
 .claude/
-
-# Mengabaikan folder graphify-out di mana pun berada (root maupun sub-direktori)
-**/graphify-out/
-
-.agents
