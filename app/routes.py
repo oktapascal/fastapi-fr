@@ -7,7 +7,7 @@ from PIL import Image, UnidentifiedImageError
 
 from . import face
 from .config import settings
-from .db import get_db
+from .db import get_db, get_kode_lokasi
 from .schemas import Challenge, EnrollResponse, VerifyResponse
 
 router = APIRouter(prefix="/api/face", tags=["face"])
@@ -49,7 +49,7 @@ def _embed_after_liveness(image_a, image_b, challenge: str):
 @router.post("/enroll", response_model=EnrollResponse)
 def enroll(
     nik: str = Form(...),
-    kode_lokasi: str = Form(...),
+    kode_lokasi: str = Depends(get_kode_lokasi),
     file: UploadFile = File(...),
     conn=Depends(get_db),
 ):
@@ -94,13 +94,14 @@ def enroll(
         )
     conn.commit()
 
-    face.refresh_cache(conn)  # sinkronkan cache di memori dengan DB
+    face.refresh_cache(conn, kode_lokasi)  # sinkronkan cache lokasi dengan DB
     return EnrollResponse(nik=nik, kode_lokasi=kode_lokasi)
 
 
 @router.post("/verify", response_model=VerifyResponse)
 def verify(
     nik: str = Form(...),
+    kode_lokasi: str = Depends(get_kode_lokasi),
     challenge: Challenge = Form(...),
     file_a: UploadFile = File(..., description="Frame netral"),
     file_b: UploadFile = File(..., description="Frame setelah gerakan challenge"),
@@ -115,14 +116,14 @@ def verify(
 
     # Cek keterdaftaran lebih dulu: percuma menjalankan model kalau NIK-nya
     # memang belum punya wajah tersimpan.
-    if not face.is_enrolled(nik):
+    if not face.is_enrolled(kode_lokasi, nik):
         return VerifyResponse(matched=False, reason="not_enrolled")
 
     vec = _embed_after_liveness(image_a, image_b, challenge)
     if vec is None:
         return VerifyResponse(matched=False, reason="liveness_failed")
 
-    score = face.similarity(nik, vec)
+    score = face.similarity(kode_lokasi, nik, vec)
     if score is None:
         return VerifyResponse(matched=False, reason="not_enrolled")
 
@@ -134,6 +135,7 @@ def verify(
 
 @router.post("/identify", response_model=VerifyResponse)
 def identify(
+    kode_lokasi: str = Depends(get_kode_lokasi),
     challenge: Challenge = Form(...),
     file_a: UploadFile = File(..., description="Frame netral"),
     file_b: UploadFile = File(..., description="Frame setelah gerakan challenge"),
@@ -158,7 +160,7 @@ def identify(
     if vec is None:
         return VerifyResponse(matched=False, reason="liveness_failed")
 
-    hasil = face.identify(vec)
+    hasil = face.identify(kode_lokasi, vec)
     if hasil is None:  # belum ada satu pun wajah terdaftar
         return VerifyResponse(matched=False, reason="not_enrolled")
 
@@ -171,7 +173,11 @@ def identify(
 
 
 @router.delete("/{nik}")
-def delete_face(nik: str, conn=Depends(get_db)):
+def delete_face(
+    nik: str,
+    kode_lokasi: str = Depends(get_kode_lokasi),
+    conn=Depends(get_db),
+):
     """Hapus wajah terdaftar milik satu NIK."""
     cursor = conn.cursor()
     cursor.execute("DELETE FROM karyawan_vector WHERE nik_karyawan = ?", nik)
@@ -179,5 +185,5 @@ def delete_face(nik: str, conn=Depends(get_db)):
         raise HTTPException(404, "Wajah untuk NIK tersebut tidak ditemukan")
     conn.commit()
 
-    face.refresh_cache(conn)
+    face.refresh_cache(conn, kode_lokasi)
     return {"nik": nik, "deleted": True}

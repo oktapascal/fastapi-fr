@@ -6,12 +6,12 @@ class Settings(BaseSettings):
 
     # Koneksi SQL Server, dipecah per komponen (bukan satu connection string)
     # agar seragam dengan proyek lain di server ini: fastapi-simkug & fastapi-sima.
-    # Sufiks angka mengikuti konvensi yang sama, walau di sini hanya ada satu DB.
+    # Sufiks angka mengikuti konvensi yang sama untuk konfigurasi server.
     db_host1: str
     db_port1: str = "8282"
-    db_name1: str
     db_user1: str
     db_password1: str
+    db_location_mapping: dict[str, str]
 
     # Shared secret dengan Lumen (core API)
     api_key: str

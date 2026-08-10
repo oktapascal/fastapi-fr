@@ -7,43 +7,43 @@ from app import face
 
 def test_similarity():
     """Verifikasi 1:1 terhadap vektor tersimpan."""
-    face._vectors = {
+    face._vectors = {"SAI01": {
         "A001": np.array([1, 0, 0], dtype=np.float32),
         "A002": np.array([0, 1, 0], dtype=np.float32),
-    }
+    }}
 
     # Wajah sendiri -> similarity 1.0
-    assert face.similarity("A001", np.array([1, 0, 0], np.float32)) == 1.0
+    assert face.similarity("SAI01", "A001", np.array([1, 0, 0], np.float32)) == 1.0
     # Wajah orang lain -> ortogonal, 0.0
-    assert face.similarity("A001", np.array([0, 1, 0], np.float32)) == 0.0
+    assert face.similarity("SAI01", "A001", np.array([0, 1, 0], np.float32)) == 0.0
     # NIK belum terdaftar -> None, bukan exception
-    assert face.similarity("TIDAK_ADA", np.array([1, 0, 0], np.float32)) is None
+    assert face.similarity("SAI01", "TIDAK_ADA", np.array([1, 0, 0], np.float32)) is None
 
-    assert face.is_enrolled("A001") and not face.is_enrolled("TIDAK_ADA")
+    assert face.is_enrolled("SAI01", "A001") and not face.is_enrolled("SAI01", "TIDAK_ADA")
     assert face.enrolled_count() == 2
 
     face._vectors = {}
     assert face.enrolled_count() == 0
-    assert face.similarity("A001", np.array([1, 0, 0], np.float32)) is None
+    assert face.similarity("SAI01", "A001", np.array([1, 0, 0], np.float32)) is None
 
 
 def test_identify():
     """Pencarian 1:N: selalu mengembalikan kandidat terdekat, bukan keputusan."""
-    face._vectors = {
+    face._vectors = {"SAI01": {
         "A001": np.array([1, 0, 0], dtype=np.float32),
         "A002": np.array([0, 1, 0], dtype=np.float32),
-    }
+    }}
 
-    assert face.identify(np.array([0.9, 0.1, 0], np.float32))[0] == "A001"
-    assert face.identify(np.array([0.1, 0.9, 0], np.float32))[0] == "A002"
+    assert face.identify("SAI01", np.array([0.9, 0.1, 0], np.float32))[0] == "A001"
+    assert face.identify("SAI01", np.array([0.1, 0.9, 0], np.float32))[0] == "A002"
 
     # Wajah asing tetap dapat kandidat dengan skor rendah — justru inilah alasan
     # pemanggil wajib menyaring dengan threshold, bukan percaya nik-nya saja.
-    nik, score = face.identify(np.array([0, 0, 1], np.float32))
+    nik, score = face.identify("SAI01", np.array([0, 0, 1], np.float32))
     assert nik in ("A001", "A002") and score == 0.0
 
     face._vectors = {}
-    assert face.identify(np.array([1, 0, 0], np.float32)) is None
+    assert face.identify("SAI01", np.array([1, 0, 0], np.float32)) is None
 
 
 def test_kesetaraan_threshold():
@@ -134,7 +134,9 @@ def test_health_db_tidak_bocorkan_kredensial():
     try:
         # TestClient tanpa `with` sengaja tidak menjalankan lifespan, jadi
         # model dan cache DB tidak ikut dimuat saat tes.
-        resp = TestClient(main.app).get("/health/db")
+        resp = TestClient(main.app).get(
+            "/health/db", headers={"X-Kode-Lokasi": "SAI01"}
+        )
     finally:
         pyodbc.connect = asli
 
@@ -146,10 +148,45 @@ def test_health_db_tidak_bocorkan_kredensial():
     assert "PWD" not in resp.text
 
 
+def test_database_dipilih_dari_header():
+    """Setiap kode lokasi harus memilih nama DB dari konfigurasi."""
+    import pyodbc
+    from fastapi.testclient import TestClient
+
+    from app import db, main
+
+    dsn_terakhir = ""
+
+    class KoneksiPalsu:
+        def close(self):
+            pass
+
+    def connect_palsu(dsn, **kwargs):
+        nonlocal dsn_terakhir
+        dsn_terakhir = dsn
+        return KoneksiPalsu()
+
+    asli = pyodbc.connect
+    pyodbc.connect = connect_palsu
+    try:
+        koneksi = next(db.get_db("41"))
+        koneksi.close()
+    finally:
+        pyodbc.connect = asli
+
+    assert "DATABASE=dbyagk;" in dsn_terakhir
+    client = TestClient(main.app)
+    assert client.get("/health/db").status_code == 400
+    assert client.get(
+        "/health/db", headers={"X-Kode-Lokasi": "TIDAK_ADA"}
+    ).status_code == 400
+
+
 if __name__ == "__main__":
     test_similarity()
     test_identify()
     test_kesetaraan_threshold()
     test_liveness()
     test_health_db_tidak_bocorkan_kredensial()
+    test_database_dipilih_dari_header()
     print("OK")

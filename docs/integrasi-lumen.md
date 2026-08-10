@@ -360,10 +360,8 @@ gambar sembarang.
     }
 ```
 
-Baris `kode_lokasi` itu bukan formalitas. `face.identify()` memindai **seluruh**
-vektor terdaftar tanpa memandang lokasi, jadi kandidat yang menang bisa saja
-karyawan cabang lain. Lumen adalah satu-satunya lapisan yang tahu kiosk ini
-berdiri di mana.
+Baris `kode_lokasi` itu bukan formalitas. Lumen wajib mengirim nilainya melalui
+header `X-Kode-Lokasi`; API hanya memindai vektor dari database lokasi tersebut.
 
 ### Ambang perlu lebih tinggi
 

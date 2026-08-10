@@ -24,14 +24,15 @@ async def lifespan(app: FastAPI):
     sudah didokumentasikan (`faces_loaded: 0` saat koneksi DB gagal).
     """
     face.load_models()
-    try:
-        conn = db.connect()
+    for kode_lokasi in settings.db_location_mapping:
         try:
-            face.refresh_cache(conn)
-        finally:
-            conn.close()
-    except pyodbc.Error:
-        logger.exception("Cache vektor gagal dimuat; service naik dengan cache kosong")
+            conn = db.connect(kode_lokasi)
+            try:
+                face.refresh_cache(conn, kode_lokasi)
+            finally:
+                conn.close()
+        except pyodbc.Error:
+            logger.exception("Cache vektor lokasi %s gagal dimuat", kode_lokasi)
     yield
 
 
@@ -62,7 +63,7 @@ def health():
 
 
 @app.get("/health/db")
-def health_db():
+def health_db(kode_lokasi: str = Depends(db.get_kode_lokasi)):
     """Tanpa auth — diagnostik koneksi DB saat setup server baru.
 
     Sengaja dipisah dari /health. /health dipanggil supervisor tiap beberapa
@@ -74,7 +75,7 @@ def health_db():
     Detail lengkap masuk log (`pm2 logs`).
     """
     try:
-        conn = db.connect()
+        conn = db.connect(kode_lokasi)
         try:
             # Bukan sekadar connect: pastikan sesi benar-benar bisa dipakai.
             conn.execute("SELECT 1").fetchone()

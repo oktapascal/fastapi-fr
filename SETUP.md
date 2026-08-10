@@ -72,7 +72,7 @@ Isi `.env`:
 ```ini
 DB_HOST1=52.220.100.190
 DB_PORT1=8282
-DB_NAME1=dbproduk
+DB_LOCATION_MAPPING={"SAI01":"dbproduk","41":"dbyagk"}
 DB_USER1=user
 DB_PASSWORD1=password
 API_KEY=string-acak-panjang
@@ -108,6 +108,7 @@ curl http://127.0.0.1:3000/health
 # Verify (1:1) — dua frame: netral + setelah gerakan challenge
 curl -X POST http://127.0.0.1:3000/api/face/verify `
   -H "X-API-Key: <api-key>" `
+  -H "X-Kode-Lokasi: SAI01" `
   -F "nik=12345" -F "challenge=smile" `
   -F "file_a=@netral.jpg" -F "file_b=@senyum.jpg"
 ```
@@ -369,7 +370,7 @@ Cek cepat tanpa mengulik log — `GET /health/db` (tanpa auth, terpisah dari
 `/health`):
 
 ```bash
-curl -i http://127.0.0.1:3000/health/db
+curl -i -H "X-Kode-Lokasi: SAI01" http://127.0.0.1:3000/health/db
 # 200 {"connected":true}
 # 503 {"connected":false,"sqlstate":"08001"}  <- gagal konek / TLS
 # 503 {"connected":false,"sqlstate":"28000"}  <- kredensial salah

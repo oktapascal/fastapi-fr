@@ -28,9 +28,9 @@ _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 _mtcnn: MTCNN | None = None
 _resnet: InceptionResnetV1 | None = None
 
-# Cache embedding, dikunci per NIK. Query + parse JSON tiap request terlalu
+# Cache embedding, dipisah per lokasi lalu dikunci per NIK. Query + parse JSON tiap request terlalu
 # mahal, jadi seluruh isi tabel dimuat sekali saat startup.
-_vectors: dict[str, np.ndarray] = {}
+_vectors: dict[str, dict[str, np.ndarray]] = {}
 
 
 def load_models() -> None:
@@ -102,14 +102,13 @@ def check_liveness(landmarks_a, landmarks_b, challenge: str) -> bool:
     return False
 
 
-def refresh_cache(conn) -> None:
-    """Muat ulang seluruh vektor dari DB ke memori."""
-    global _vectors
+def refresh_cache(conn, kode_lokasi: str) -> None:
+    """Muat ulang seluruh vektor satu lokasi dari DB ke memori."""
     rows = conn.execute(
         "SELECT nik_karyawan, face_vector "
         "FROM karyawan_vector WHERE face_vector IS NOT NULL"
     ).fetchall()
-    _vectors = {
+    _vectors[kode_lokasi] = {
         r.nik_karyawan: np.array(json.loads(r.face_vector), dtype=np.float32)
         for r in rows
     }
@@ -117,27 +116,27 @@ def refresh_cache(conn) -> None:
 
 def enrolled_count() -> int:
     """Jumlah wajah yang termuat di cache."""
-    return len(_vectors)
+    return sum(map(len, _vectors.values()))
 
 
-def is_enrolled(nik: str) -> bool:
+def is_enrolled(kode_lokasi: str, nik: str) -> bool:
     """Apakah NIK sudah punya wajah terdaftar?"""
-    return nik in _vectors
+    return nik in _vectors.get(kode_lokasi, {})
 
 
-def similarity(nik: str, vec: np.ndarray) -> float | None:
+def similarity(kode_lokasi: str, nik: str, vec: np.ndarray) -> float | None:
     """Cosine similarity wajah terhadap vektor tersimpan milik NIK.
 
     Mengembalikan None bila NIK belum punya wajah terdaftar. Karena kedua vektor
     ternormalisasi, dot product setara cosine similarity.
     """
-    tersimpan = _vectors.get(nik)
+    tersimpan = _vectors.get(kode_lokasi, {}).get(nik)
     if tersimpan is None:
         return None
     return float(tersimpan @ vec)
 
 
-def identify(vec: np.ndarray) -> tuple[str, float] | None:
+def identify(kode_lokasi: str, vec: np.ndarray) -> tuple[str, float] | None:
     """Cari NIK dengan similarity tertinggi — pencarian 1:N.
 
     Mengembalikan None hanya bila cache kosong. Selain itu SELALU ada kandidat
@@ -148,7 +147,8 @@ def identify(vec: np.ndarray) -> tuple[str, float] | None:
     wajah membengkak, tumpuk vektor jadi satu matriks (N, 512) dan ganti loop
     ini dengan satu perkalian matriks.
     """
-    if not _vectors:
+    vectors = _vectors.get(kode_lokasi, {})
+    if not vectors:
         return None
-    nik = max(_vectors, key=lambda k: _vectors[k] @ vec)
-    return nik, float(_vectors[nik] @ vec)
+    nik = max(vectors, key=lambda k: vectors[k] @ vec)
+    return nik, float(vectors[nik] @ vec)
