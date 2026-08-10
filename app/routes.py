@@ -95,7 +95,7 @@ def enroll(
     conn.commit()
 
     face.refresh_cache(conn, kode_lokasi)  # sinkronkan cache lokasi dengan DB
-    return EnrollResponse(nik=nik, kode_lokasi=kode_lokasi)
+    return EnrollResponse(nik=nik)
 
 
 @router.post("/verify", response_model=VerifyResponse)

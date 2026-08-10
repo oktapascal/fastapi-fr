@@ -115,8 +115,9 @@ cocok sampai vektornya dihapus.
 
 ```php
     $response = Http::withHeaders([
-            'X-API-Key'    => env('FACE_API_KEY'),
-            'X-Request-Id' => $request->header('X-Request-Id', (string) Str::uuid()),
+            'X-API-Key'     => env('FACE_API_KEY'),
+            'X-Request-Id'  => $request->header('X-Request-Id', (string) Str::uuid()),
+            'X-Kode-Lokasi' => $kodeLokasi,
         ])
         ->connectTimeout(5)
         ->timeout(15)   // inference CPU: 2x deteksi landmark + 1x embedding
@@ -233,12 +234,14 @@ if (!$karyawan) {
     return response()->json(['status' => 'error', 'message' => 'NIK tidak valid.'], 422);
 }
 
-$response = Http::withHeaders(['X-API-Key' => env('FACE_API_KEY')])
+$response = Http::withHeaders([
+        'X-API-Key'     => env('FACE_API_KEY'),
+        'X-Kode-Lokasi' => $request->input('kode_lokasi'),
+    ])
     ->timeout(15)
     ->attach('file', file_get_contents($request->file('foto')), 'face.jpg')
     ->post(env('FACE_SERVICE_URL') . '/api/face/enroll', [
         'nik'         => $request->input('nik'),
-        'kode_lokasi' => $request->input('kode_lokasi'),
     ]);
 ```
 
@@ -253,7 +256,10 @@ model ancamannya berbeda dari verifikasi harian.
 ### Saat karyawan resign
 
 ```php
-Http::withHeaders(['X-API-Key' => env('FACE_API_KEY')])
+Http::withHeaders([
+        'X-API-Key'     => env('FACE_API_KEY'),
+        'X-Kode-Lokasi' => $request->input('kode_lokasi'),
+    ])
     ->delete(env('FACE_SERVICE_URL') . "/api/face/{$nik}");
 ```
 
@@ -307,7 +313,10 @@ public function absenKiosk(Request $request)
         return response()->json(['status' => 'error', 'message' => 'Perangkat tidak dikenal.'], 401);
     }
 
-    $response = Http::withHeaders(['X-API-Key' => env('FACE_API_KEY')])
+    $response = Http::withHeaders([
+        'X-API-Key'     => env('FACE_API_KEY'),
+        'X-Kode-Lokasi' => $perangkat->kode_lokasi,
+    ])
         ->connectTimeout(5)
         ->timeout(15)
         ->attach('file_a', file_get_contents($request->file('file_a')), 'a.jpg')

@@ -63,7 +63,10 @@ def health():
 
 
 @app.get("/health/db")
-def health_db(kode_lokasi: str = Depends(db.get_kode_lokasi)):
+def health_db(
+    kode_lokasi: str | None = None,
+    x_kode_lokasi: str | None = Header(None)
+):
     """Tanpa auth — diagnostik koneksi DB saat setup server baru.
 
     Sengaja dipisah dari /health. /health dipanggil supervisor tiap beberapa
@@ -74,8 +77,11 @@ def health_db(kode_lokasi: str = Depends(db.get_kode_lokasi)):
     mengandung IP server dan versi driver, sementara endpoint ini publik.
     Detail lengkap masuk log (`pm2 logs`).
     """
+    lokasi = kode_lokasi or x_kode_lokasi
+    if not lokasi or lokasi not in settings.db_location_mapping:
+        raise HTTPException(400, "X-Kode-Lokasi atau parameter kode_lokasi tidak valid")
     try:
-        conn = db.connect(kode_lokasi)
+        conn = db.connect(lokasi)
         try:
             # Bukan sekadar connect: pastikan sesi benar-benar bisa dipakai.
             conn.execute("SELECT 1").fetchone()
