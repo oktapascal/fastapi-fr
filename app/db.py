@@ -1,5 +1,5 @@
 import pyodbc
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, Form, HTTPException
 
 from .config import settings
 
@@ -33,6 +33,22 @@ def get_db(kode_lokasi: str = Depends(get_kode_lokasi)):
     pyodbc sudah melakukan connection pooling secara internal, jadi tidak
     perlu pool manual di sini.
     """
+    conn = connect(kode_lokasi)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def get_kode_lokasi_form(kode_lokasi: str = Form(...)) -> str:
+    """Validasi lokasi request dari form body sebelum memilih database."""
+    if kode_lokasi not in settings.db_location_mapping:
+        raise HTTPException(400, "Kode lokasi tidak valid")
+    return kode_lokasi
+
+
+def get_db_form(kode_lokasi: str = Depends(get_kode_lokasi_form)):
+    """Dependency: db connection using form-based kode_lokasi."""
     conn = connect(kode_lokasi)
     try:
         yield conn

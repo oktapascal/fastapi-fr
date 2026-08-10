@@ -9,6 +9,7 @@ Challenge = Literal["smile", "look_left", "look_right"]
 
 class EnrollResponse(BaseModel):
     nik: str
+    kode_lokasi: str
 
 
 class VerifyResponse(BaseModel):

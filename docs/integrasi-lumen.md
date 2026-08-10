@@ -124,8 +124,9 @@ cocok sampai vektornya dihapus.
         ->attach('file_a', file_get_contents($request->file('file_a')), 'a.jpg')
         ->attach('file_b', file_get_contents($request->file('file_b')), 'b.jpg')
         ->post(env('FACE_SERVICE_URL') . '/api/face/verify', [
-            'nik'       => $nik,          // dari JWT, bukan dari input
-            'challenge' => $request->input('challenge'),
+            'nik'         => $nik,          // dari JWT, bukan dari input
+            'kode_lokasi' => $kodeLokasi,
+            'challenge'   => $request->input('challenge'),
         ]);
 
     if ($response->failed()) {
@@ -242,6 +243,7 @@ $response = Http::withHeaders([
     ->attach('file', file_get_contents($request->file('foto')), 'face.jpg')
     ->post(env('FACE_SERVICE_URL') . '/api/face/enroll', [
         'nik'         => $request->input('nik'),
+        'kode_lokasi' => $request->input('kode_lokasi'),
     ]);
 ```
 
@@ -322,7 +324,8 @@ public function absenKiosk(Request $request)
         ->attach('file_a', file_get_contents($request->file('file_a')), 'a.jpg')
         ->attach('file_b', file_get_contents($request->file('file_b')), 'b.jpg')
         ->post(env('FACE_SERVICE_URL') . '/api/face/identify', [
-            'challenge' => $request->input('challenge'),
+            'kode_lokasi' => $perangkat->kode_lokasi,
+            'challenge'   => $request->input('challenge'),
         ]);
 ```
 

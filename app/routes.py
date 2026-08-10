@@ -7,7 +7,7 @@ from PIL import Image, UnidentifiedImageError
 
 from . import face
 from .config import settings
-from .db import get_db, get_kode_lokasi
+from .db import get_db, get_kode_lokasi, get_db_form, get_kode_lokasi_form
 from .schemas import Challenge, EnrollResponse, VerifyResponse
 
 router = APIRouter(prefix="/api/face", tags=["face"])
@@ -49,9 +49,9 @@ def _embed_after_liveness(image_a, image_b, challenge: str):
 @router.post("/enroll", response_model=EnrollResponse)
 def enroll(
     nik: str = Form(...),
-    kode_lokasi: str = Depends(get_kode_lokasi),
+    kode_lokasi: str = Depends(get_kode_lokasi_form),
     file: UploadFile = File(...),
-    conn=Depends(get_db),
+    conn=Depends(get_db_form),
 ):
     """Daftarkan wajah untuk satu NIK.
 
@@ -95,13 +95,13 @@ def enroll(
     conn.commit()
 
     face.refresh_cache(conn, kode_lokasi)  # sinkronkan cache lokasi dengan DB
-    return EnrollResponse(nik=nik)
+    return EnrollResponse(nik=nik, kode_lokasi=kode_lokasi)
 
 
 @router.post("/verify", response_model=VerifyResponse)
 def verify(
     nik: str = Form(...),
-    kode_lokasi: str = Depends(get_kode_lokasi),
+    kode_lokasi: str = Depends(get_kode_lokasi_form),
     challenge: Challenge = Form(...),
     file_a: UploadFile = File(..., description="Frame netral"),
     file_b: UploadFile = File(..., description="Frame setelah gerakan challenge"),
@@ -135,7 +135,7 @@ def verify(
 
 @router.post("/identify", response_model=VerifyResponse)
 def identify(
-    kode_lokasi: str = Depends(get_kode_lokasi),
+    kode_lokasi: str = Depends(get_kode_lokasi_form),
     challenge: Challenge = Form(...),
     file_a: UploadFile = File(..., description="Frame netral"),
     file_b: UploadFile = File(..., description="Frame setelah gerakan challenge"),
