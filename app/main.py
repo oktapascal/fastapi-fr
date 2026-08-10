@@ -1,4 +1,6 @@
 import logging
+import os
+from logging.handlers import RotatingFileHandler
 from contextlib import asynccontextmanager
 from secrets import compare_digest
 
@@ -9,6 +11,17 @@ from fastapi.responses import JSONResponse
 from . import db, face
 from .config import settings
 from .routes import router
+
+# Konfigurasi logging ke file dan console
+os.makedirs("logs", exist_ok=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        RotatingFileHandler("logs/app.log", maxBytes=10_000_000, backupCount=5),
+        logging.StreamHandler()
+    ]
+)
 
 logger = logging.getLogger(__name__)
 
