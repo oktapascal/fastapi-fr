@@ -64,15 +64,18 @@ def embed(image: Image.Image) -> np.ndarray:
     return vec / np.linalg.norm(vec)
 
 
-def landmarks_of(image: Image.Image) -> np.ndarray:
+def landmarks_of(image: Image.Image, frame: str) -> np.ndarray:
     """Ambil 5 titik landmark wajah pertama: 2 mata, hidung, 2 sudut mulut.
+
+    `frame` disebut di pesan error agar log bisa membedakan foto bermasalah
+    (frame netral) dari kepala yang menoleh terlalu jauh (frame gerakan).
 
     Raises:
         ValueError: bila tidak ada wajah terdeteksi.
     """
     _, _, landmarks = _mtcnn.detect(image, landmarks=True)
     if landmarks is None:
-        raise ValueError("Wajah tidak terdeteksi pada salah satu frame.")
+        raise ValueError(f"Wajah tidak terdeteksi pada frame {frame}.")
     return landmarks[0]
 
 

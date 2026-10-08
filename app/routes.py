@@ -3,7 +3,7 @@ import json
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from . import face
 from .config import settings
@@ -25,7 +25,9 @@ def _read_image(file: UploadFile) -> Image.Image:
         raise HTTPException(413, "Ukuran gambar melebihi batas")
 
     try:
-        return Image.open(io.BytesIO(data)).convert("RGB")
+        # Foto kamera HP sering disimpan miring dengan tag EXIF Orientation;
+        # PIL tidak memutarnya otomatis, padahal MTCNN gagal pada wajah miring 90°.
+        return ImageOps.exif_transpose(Image.open(io.BytesIO(data))).convert("RGB")
     except UnidentifiedImageError:
         raise HTTPException(400, "Format gambar tidak valid")
 
@@ -37,8 +39,8 @@ def _embed_after_liveness(image_a, image_b, challenge: str):
         HTTPException: 422 bila wajah tidak terdeteksi di salah satu frame.
     """
     try:
-        landmarks_a = face.landmarks_of(image_a)
-        landmarks_b = face.landmarks_of(image_b)
+        landmarks_a = face.landmarks_of(image_a, "netral")
+        landmarks_b = face.landmarks_of(image_b, "gerakan")
         if not face.check_liveness(landmarks_a, landmarks_b, challenge):
             return None
         return face.embed(image_a)  # embedding diambil dari frame netral

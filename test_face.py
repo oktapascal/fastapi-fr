@@ -182,6 +182,27 @@ def test_database_dipilih_dari_header():
     ).status_code == 400
 
 
+def test_read_image_ikuti_exif_orientation():
+    """Foto HP miring + EXIF Orientation=6 harus diputar tegak sebelum dideteksi."""
+    import io
+
+    from fastapi import UploadFile
+    from PIL import Image
+    from starlette.datastructures import Headers
+
+    from app.routes import _read_image
+
+    # Piksel tersimpan landscape 200x100, EXIF menyatakan seharusnya diputar 90°
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    buf = io.BytesIO()
+    Image.new("RGB", (200, 100)).save(buf, "JPEG", exif=exif)
+    buf.seek(0)
+
+    file = UploadFile(buf, headers=Headers({"content-type": "image/jpeg"}))
+    assert _read_image(file).size == (100, 200)
+
+
 if __name__ == "__main__":
     test_similarity()
     test_identify()
@@ -189,4 +210,5 @@ if __name__ == "__main__":
     test_liveness()
     test_health_db_tidak_bocorkan_kredensial()
     test_database_dipilih_dari_header()
+    test_read_image_ikuti_exif_orientation()
     print("OK")
