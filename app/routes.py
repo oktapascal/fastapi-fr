@@ -1,9 +1,10 @@
 import io
 import json
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageFilter, ImageOps, ImageStat, UnidentifiedImageError
 
 from . import face
 from .config import settings
@@ -11,6 +12,7 @@ from .db import get_db, get_kode_lokasi, get_db_form, get_kode_lokasi_form
 from .schemas import Challenge, EnrollResponse, VerifyResponse
 
 router = APIRouter(prefix="/api/face", tags=["face"])
+logger = logging.getLogger(__name__)
 
 
 def _read_image(file: UploadFile) -> Image.Image:
@@ -32,6 +34,18 @@ def _read_image(file: UploadFile) -> Image.Image:
         raise HTTPException(400, "Format gambar tidak valid")
 
 
+def _image_stats(image: Image.Image) -> str:
+    """Ringkasan frame untuk log: ukuran, kecerahan (0-255), ketajaman tepi.
+
+    Frame hitam/gelap -> terang rendah; blur karena gerakan -> tajam jauh lebih
+    rendah dibanding frame netral pada request yang sama.
+    """
+    gray = image.convert("L")
+    terang = ImageStat.Stat(gray).mean[0]
+    tajam = ImageStat.Stat(gray.filter(ImageFilter.FIND_EDGES)).mean[0]
+    return f"{image.width}x{image.height} terang={terang:.0f} tajam={tajam:.1f}"
+
+
 def _embed_after_liveness(image_a, image_b, challenge: str):
     """Cek liveness dua frame, lalu embed frame netral. None = liveness gagal.
 
@@ -45,6 +59,12 @@ def _embed_after_liveness(image_a, image_b, challenge: str):
             return None
         return face.embed(image_a)  # embedding diambil dari frame netral
     except ValueError as e:
+        # Foto tidak disimpan (data biometrik); statistik ini cukup untuk membedakan
+        # frame gelap, blur, atau kepala yang menoleh terlalu jauh.
+        logger.warning(
+            "%s challenge=%s | netral: %s | gerakan: %s",
+            e, challenge, _image_stats(image_a), _image_stats(image_b),
+        )
         raise HTTPException(422, str(e))
 
 
