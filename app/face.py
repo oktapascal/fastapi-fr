@@ -1,4 +1,4 @@
-"""Seluruh logika ML: deteksi wajah, embedding, liveness, dan pencocokan.
+"""Seluruh logika ML: deteksi wajah, embedding, dan pencocokan.
 
 Verifikasi bersifat 1:1 — Lumen mengirim NIK, service membandingkan wajah
 dengan satu vektor milik NIK tersebut. Bukan pencarian 1:N.
@@ -6,8 +6,8 @@ dengan satu vektor milik NIK tersebut. Bukan pencarian 1:N.
 Embedding disimpan di DB sebagai JSON string (nvarchar(max)) karena SQL Server
 2019 tidak punya tipe vector maupun pencarian similarity.
 
-Parameter model dan ambang liveness mengikuti implementasi referensi
-(workspace-face-fr/face_api/api.py) agar kalibrasi di sana tetap berlaku.
+Parameter model mengikuti implementasi referensi (workspace-face-fr/face_api/api.py)
+agar embedding yang dihasilkan identik dan kalibrasi threshold di sana tetap berlaku.
 """
 
 import json
@@ -19,9 +19,6 @@ from PIL import Image
 
 # Dimensi embedding InceptionResnetV1 (pretrained vggface2)
 EMBED_DIM = 512
-
-# Challenge liveness yang didukung; dipakai juga untuk validasi di schemas.py
-CHALLENGES = ("smile", "look_left", "look_right")
 
 _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -62,47 +59,6 @@ def embed(image: Image.Image) -> np.ndarray:
     # sudah diverifikasi). Pembagian ini penjaga agar asumsi "dot product ==
     # cosine similarity" tetap sah kalau modelnya suatu saat diganti.
     return vec / np.linalg.norm(vec)
-
-
-def landmarks_of(image: Image.Image, frame: str) -> np.ndarray:
-    """Ambil 5 titik landmark wajah pertama: 2 mata, hidung, 2 sudut mulut.
-
-    `frame` disebut di pesan error agar log bisa membedakan foto bermasalah
-    (frame netral) dari kepala yang menoleh terlalu jauh (frame gerakan).
-
-    Raises:
-        ValueError: bila tidak ada wajah terdeteksi.
-    """
-    _, _, landmarks = _mtcnn.detect(image, landmarks=True)
-    if landmarks is None:
-        raise ValueError(f"Wajah tidak terdeteksi pada frame {frame}.")
-    return landmarks[0]
-
-
-def check_liveness(landmarks_a, landmarks_b, challenge: str) -> bool:
-    """Bandingkan dua frame: apakah gerakan sesuai challenge benar-benar terjadi?
-
-    Disalin dari implementasi referensi, termasuk ambangnya (3% pelebaran mulut
-    untuk senyum, 8 piksel selisih yaw untuk menoleh) — angka-angka itu sudah
-    teruji di sana, jangan diubah tanpa pengujian ulang.
-    """
-
-    def mouth_width(points) -> float:
-        return float(points[4][0] - points[3][0])
-
-    def yaw_difference(points) -> float:
-        left_eye, right_eye, nose = points[0], points[1], points[2]
-        return float((nose[0] - left_eye[0]) - (right_eye[0] - nose[0]))
-
-    if challenge == "smile":
-        width_a = mouth_width(landmarks_a)
-        width_b = mouth_width(landmarks_b)
-        return width_a > 0 and ((width_b - width_a) / width_a) > 0.03
-    if challenge == "look_right":
-        return yaw_difference(landmarks_b) < yaw_difference(landmarks_a) - 8
-    if challenge == "look_left":
-        return yaw_difference(landmarks_b) > yaw_difference(landmarks_a) + 8
-    return False
 
 
 def refresh_cache(conn, kode_lokasi: str) -> None:

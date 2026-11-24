@@ -9,7 +9,7 @@ from PIL import Image, ImageFilter, ImageOps, ImageStat, UnidentifiedImageError
 from . import face
 from .config import settings
 from .db import get_db, get_kode_lokasi, get_db_form, get_kode_lokasi_form
-from .schemas import Challenge, EnrollResponse, VerifyResponse
+from .schemas import EnrollResponse, VerifyResponse
 
 router = APIRouter(prefix="/api/face", tags=["face"])
 logger = logging.getLogger(__name__)
@@ -37,8 +37,7 @@ def _read_image(file: UploadFile) -> Image.Image:
 def _image_stats(image: Image.Image) -> str:
     """Ringkasan frame untuk log: ukuran, kecerahan (0-255), ketajaman tepi.
 
-    Frame hitam/gelap -> terang rendah; blur karena gerakan -> tajam jauh lebih
-    rendah dibanding frame netral pada request yang sama.
+    Frame gelap -> terang rendah; blur (gerakan atau kamera) -> tajam rendah.
     """
     gray = image.convert("L")
     terang = ImageStat.Stat(gray).mean[0]
@@ -46,25 +45,18 @@ def _image_stats(image: Image.Image) -> str:
     return f"{image.width}x{image.height} terang={terang:.0f} tajam={tajam:.1f}"
 
 
-def _embed_after_liveness(image_a, image_b, challenge: str):
-    """Cek liveness dua frame, lalu embed frame netral. None = liveness gagal.
+def _embed(image: Image.Image):
+    """Embed satu frame.
 
     Raises:
-        HTTPException: 422 bila wajah tidak terdeteksi di salah satu frame.
+        HTTPException: 422 bila wajah tidak terdeteksi.
     """
     try:
-        landmarks_a = face.landmarks_of(image_a, "netral")
-        landmarks_b = face.landmarks_of(image_b, "gerakan")
-        if not face.check_liveness(landmarks_a, landmarks_b, challenge):
-            return None
-        return face.embed(image_a)  # embedding diambil dari frame netral
+        return face.embed(image)
     except ValueError as e:
-        # Foto tidak disimpan (data biometrik); statistik ini cukup untuk membedakan
-        # frame gelap, blur, atau kepala yang menoleh terlalu jauh.
-        logger.warning(
-            "%s challenge=%s | netral: %s | gerakan: %s",
-            e, challenge, _image_stats(image_a), _image_stats(image_b),
-        )
+        # Foto tidak disimpan (data biometrik); statistik ini cukup untuk
+        # membedakan frame gelap, blur, atau wajah yang tidak menghadap kamera.
+        logger.warning("%s | %s", e, _image_stats(image))
         raise HTTPException(422, str(e))
 
 
@@ -77,8 +69,8 @@ def enroll(
 ):
     """Daftarkan wajah untuk satu NIK.
 
-    Tanpa liveness — sama seperti /register di implementasi referensi. Enroll
-    dilakukan petugas secara terawasi, jadi risikonya berbeda dari verifikasi.
+    Enroll dilakukan petugas secara terawasi, jadi risikonya berbeda dari
+    verifikasi harian.
 
     Validasi bahwa NIK ada di master karyawan dilakukan oleh Lumen — service ini
     sengaja tidak menyentuh tabel hr_karyawan sama sekali.
@@ -124,26 +116,21 @@ def enroll(
 def verify(
     nik: str = Form(...),
     kode_lokasi: str = Depends(get_kode_lokasi_form),
-    challenge: Challenge = Form(...),
-    file_a: UploadFile = File(..., description="Frame netral"),
-    file_b: UploadFile = File(..., description="Frame setelah gerakan challenge"),
+    file: UploadFile = File(...),
 ):
-    """Verifikasi 1:1 wajah terhadap NIK, dengan liveness check dua frame.
+    """Verifikasi 1:1 wajah terhadap NIK, dari satu frame.
 
     Tidak menyentuh DB — seluruh vektor sudah ada di memori. Pencatatan absensi
     adalah urusan Lumen.
     """
-    image_a = _read_image(file_a)
-    image_b = _read_image(file_b)
+    image = _read_image(file)
 
     # Cek keterdaftaran lebih dulu: percuma menjalankan model kalau NIK-nya
     # memang belum punya wajah tersimpan.
     if not face.is_enrolled(kode_lokasi, nik):
         return VerifyResponse(matched=False, reason="not_enrolled")
 
-    vec = _embed_after_liveness(image_a, image_b, challenge)
-    if vec is None:
-        return VerifyResponse(matched=False, reason="liveness_failed")
+    vec = _embed(image)
 
     score = face.similarity(kode_lokasi, nik, vec)
     if score is None:
@@ -158,9 +145,7 @@ def verify(
 @router.post("/identify", response_model=VerifyResponse)
 def identify(
     kode_lokasi: str = Depends(get_kode_lokasi_form),
-    challenge: Challenge = Form(...),
-    file_a: UploadFile = File(..., description="Frame netral"),
-    file_b: UploadFile = File(..., description="Frame setelah gerakan challenge"),
+    file: UploadFile = File(...),
 ):
     """Identifikasi 1:N — cari NIK pemilik wajah, tanpa NIK sebagai input.
 
@@ -175,12 +160,9 @@ def identify(
     umumnya perlu lebih tinggi — ukur dengan data lapangan sebelum dipakai
     untuk keputusan absensi.
     """
-    image_a = _read_image(file_a)
-    image_b = _read_image(file_b)
+    image = _read_image(file)
 
-    vec = _embed_after_liveness(image_a, image_b, challenge)
-    if vec is None:
-        return VerifyResponse(matched=False, reason="liveness_failed")
+    vec = _embed(image)
 
     hasil = face.identify(kode_lokasi, vec)
     if hasil is None:  # belum ada satu pun wajah terdaftar

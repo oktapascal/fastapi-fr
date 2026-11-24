@@ -1,4 +1,4 @@
-"""Pengecekan logika verifikasi & liveness. Jalankan: python test_face.py"""
+"""Pengecekan logika verifikasi. Jalankan: python test_face.py"""
 
 import numpy as np
 
@@ -74,42 +74,96 @@ def test_kesetaraan_threshold():
         assert cocok_cosine == cocok_euclidean
 
 
-def test_liveness():
-    """Landmark: [mata_kiri, mata_kanan, hidung, mulut_kiri, mulut_kanan]."""
-    # Wajah netral menghadap depan; hidung di tengah antara kedua mata
-    netral = np.array([[40, 50], [60, 50], [50, 60], [42, 75], [58, 75]], dtype=float)
+def test_endpoints_accept_single_frame_without_challenge():
+    """New contract: one frame, no liveness challenge."""
+    import io
 
-    # -- smile: mulut melebar >3% --
-    senyum = netral.copy()
-    senyum[3][0], senyum[4][0] = 40, 60  # lebar 16 -> 20 (+25%)
-    assert face.check_liveness(netral, senyum, "smile")
-    # Frame identik bukan senyum
-    assert not face.check_liveness(netral, netral, "smile")
-    # Pelebaran 1% saja belum cukup
-    tipis = netral.copy()
-    tipis[4][0] = 58.16
-    assert not face.check_liveness(netral, tipis, "smile")
+    from fastapi.testclient import TestClient
+    from PIL import Image
 
-    # -- menoleh: hidung bergeser terhadap kedua mata --
-    # yaw netral = (50-40) - (60-50) = 0
-    kanan = netral.copy()
-    kanan[2][0] = 44  # yaw = 4 - 16 = -12, selisih -12 < -8
-    assert face.check_liveness(netral, kanan, "look_right")
-    assert not face.check_liveness(netral, kanan, "look_left")
+    from app import main
+    from app.config import settings
 
-    kiri = netral.copy()
-    kiri[2][0] = 56  # yaw = 16 - 4 = +12
-    assert face.check_liveness(netral, kiri, "look_left")
-    assert not face.check_liveness(netral, kiri, "look_right")
+    def frame() -> io.BytesIO:
+        buffer = io.BytesIO()
+        Image.new("RGB", (32, 32)).save(buffer, "JPEG")
+        buffer.seek(0)
+        return buffer
 
-    # Gerakan terlalu kecil (di bawah ambang 8 piksel) ditolak
-    sedikit = netral.copy()
-    sedikit[2][0] = 48  # yaw = -4
-    assert not face.check_liveness(netral, sedikit, "look_right")
+    kode_lokasi = next(iter(settings.db_location_mapping))
+    face._vectors = {kode_lokasi: {"A001": np.array([1, 0, 0], dtype=np.float32)}}
+    original_embed = face.embed
+    face.embed = lambda _image: np.array([1, 0, 0], dtype=np.float32)
+    try:
+        client = TestClient(main.app)
+        headers = {"X-API-Key": settings.api_key}
+        verified = client.post(
+            "/api/face/verify",
+            data={"nik": "A001", "kode_lokasi": kode_lokasi},
+            files={"file": ("face.jpg", frame(), "image/jpeg")},
+            headers=headers,
+        )
+        identified = client.post(
+            "/api/face/identify",
+            data={"kode_lokasi": kode_lokasi},
+            files={"file": ("face.jpg", frame(), "image/jpeg")},
+            headers=headers,
+        )
+    finally:
+        face.embed = original_embed
+        face._vectors = {}
 
-    # Challenge tak dikenal selalu gagal (defense in depth; Pydantic sudah
-    # menyaringnya lebih dulu lewat tipe Literal di schemas.py)
-    assert not face.check_liveness(netral, senyum, "menari")
+    assert verified.status_code == 200, verified.text
+    assert verified.json()["matched"] is True and verified.json()["score"] == 1.0
+    assert identified.status_code == 200, identified.text
+    assert identified.json()["nik"] == "A001"
+
+
+def test_identity_check_rejects_other_face():
+    """Single-frame verification still compares against the enrolled NIK."""
+    import io
+
+    from fastapi.testclient import TestClient
+    from PIL import Image
+
+    from app import main
+    from app.config import settings
+
+    def frame() -> io.BytesIO:
+        buffer = io.BytesIO()
+        Image.new("RGB", (32, 32)).save(buffer, "JPEG")
+        buffer.seek(0)
+        return buffer
+
+    kode_lokasi = next(iter(settings.db_location_mapping))
+    face._vectors = {kode_lokasi: {"A001": np.array([1, 0, 0], dtype=np.float32)}}
+    original_embed = face.embed
+    face.embed = lambda _image: np.array([0, 1, 0], dtype=np.float32)
+    try:
+        client = TestClient(main.app)
+        headers = {"X-API-Key": settings.api_key}
+        verified = client.post(
+            "/api/face/verify",
+            data={"nik": "A001", "kode_lokasi": kode_lokasi},
+            files={"file": ("face.jpg", frame(), "image/jpeg")},
+            headers=headers,
+        )
+        identified = client.post(
+            "/api/face/identify",
+            data={"kode_lokasi": kode_lokasi},
+            files={"file": ("face.jpg", frame(), "image/jpeg")},
+            headers=headers,
+        )
+    finally:
+        face.embed = original_embed
+        face._vectors = {}
+
+    assert verified.status_code == 200, verified.text
+    assert verified.json()["matched"] is False
+    assert verified.json()["reason"] == "face_mismatch"
+    assert identified.status_code == 200, identified.text
+    assert identified.json()["matched"] is False
+    assert identified.json()["nik"] is None
 
 
 def test_health_db_tidak_bocorkan_kredensial():
@@ -207,7 +261,8 @@ if __name__ == "__main__":
     test_similarity()
     test_identify()
     test_kesetaraan_threshold()
-    test_liveness()
+    test_endpoints_accept_single_frame_without_challenge()
+    test_identity_check_rejects_other_face()
     test_health_db_tidak_bocorkan_kredensial()
     test_database_dipilih_dari_header()
     test_read_image_ikuti_exif_orientation()

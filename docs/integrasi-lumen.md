@@ -41,9 +41,7 @@ Authorization: Bearer <JWT user>
 X-Request-Id: <uuid>
 Content-Type: multipart/form-data
 
-challenge = smile | look_left | look_right
-file_a    = <frame netral>
-file_b    = <frame setelah gerakan>
+file = <frame wajah>
 ```
 
 **NIK tidak ada di kontrak ini.** Itu disengaja dan merupakan titik keamanan
@@ -57,9 +55,7 @@ paling penting di seluruh alur — lihat bagian berikutnya.
 public function verifikasi(Request $request)
 {
     $this->validate($request, [
-        'challenge' => 'required|in:smile,look_left,look_right',
-        'file_a'    => 'required|image|max:5120',
-        'file_b'    => 'required|image|max:5120',
+        'file' => 'required|image|max:5120',
     ]);
 
     // NIK diambil dari klaim JWT. JANGAN dari $request->input('nik').
@@ -120,13 +116,11 @@ cocok sampai vektornya dihapus.
             'X-Kode-Lokasi' => $kodeLokasi,
         ])
         ->connectTimeout(5)
-        ->timeout(15)   // inference CPU: 2x deteksi landmark + 1x embedding
-        ->attach('file_a', file_get_contents($request->file('file_a')), 'a.jpg')
-        ->attach('file_b', file_get_contents($request->file('file_b')), 'b.jpg')
+        ->timeout(15)   // inference CPU: 1x deteksi + 1x embedding
+        ->attach('file', file_get_contents($request->file('file')), 'face.jpg')
         ->post(env('FACE_SERVICE_URL') . '/api/face/verify', [
             'nik'         => $nik,          // dari JWT, bukan dari input
             'kode_lokasi' => $kodeLokasi,
-            'challenge'   => $request->input('challenge'),
         ]);
 
     if ($response->failed()) {
@@ -148,11 +142,10 @@ cocok sampai vektornya dihapus.
 ```json
 { "matched": true,  "score": 0.9134, "reason": null }
 { "matched": false, "score": 0.4210, "reason": "face_mismatch" }
-{ "matched": false, "score": null,   "reason": "liveness_failed" }
 { "matched": false, "score": null,   "reason": "not_enrolled" }
 ```
 
-Ketiga kegagalan itu dikembalikan dengan status **200**, bukan error — semuanya
+Kedua kegagalan itu dikembalikan dengan status **200**, bukan error — semuanya
 adalah hasil bisnis yang sah, bukan kerusakan sistem. Yang berstatus non-200:
 
 | Status | Arti | Sikap Lumen |
@@ -168,15 +161,12 @@ adalah hasil bisnis yang sah, bukan kerusakan sistem. Yang berstatus non-200:
 
 ```php
     if (!$hasil['matched']) {
-        // liveness_failed layak dicatat terpisah: itu indikasi percobaan
-        // spoofing, bukan sekadar wajah yang tidak cocok.
         $this->catatKegagalan($nik, $hasil['reason'], $hasil['score'] ?? null);
 
         return response()->json([
             'status'  => 'error',
             'matched' => false,
             'message' => match ($hasil['reason']) {
-                'liveness_failed' => 'Gerakan tidak terdeteksi. Ulangi sesuai instruksi.',
                 'face_mismatch'   => 'Wajah tidak cocok dengan data Anda.',
                 'not_enrolled'    => 'Wajah Anda belum terdaftar. Hubungi HRD.',
                 default           => 'Verifikasi gagal.',
@@ -208,9 +198,11 @@ Simpan `score` bersama catatan absensi. Ketika suatu saat perlu mengkalibrasi
 ulang threshold, distribusi skor nyata dari lapangan adalah data terbaik yang
 Anda punya — dan tidak bisa direkonstruksi setelah kejadian.
 
-Catat `liveness_failed` secara terpisah dan pantau. Lonjakan mendadak pada satu
-NIK adalah sinyal percobaan titip absen, dan itu justru kejadian yang paling
-ingin Anda ketahui dari sistem ini.
+Catat `face_mismatch` per NIK dan pantau. Lonjakan mendadak pada satu NIK tetap
+sinyal percobaan titip absen — tetapi service ini tidak memeriksa liveness, jadi
+ia tidak bisa membedakan wajah asli dari foto. Kalau risiko itu penting untuk
+penggajian, tambahkan lapisan anti-spoofing terpisah sebelum mengandalkan
+kecocokan wajah saja.
 
 ---
 
@@ -252,8 +244,8 @@ input, karena admin mendaftarkan wajah orang lain. Justru karena itu validasi ke
 master `hr_karyawan` menjadi wajib — service Python sengaja tidak menyentuh tabel
 itu sama sekali dan akan menerima NIK apa pun yang dikirim.
 
-Enroll tidak memakai liveness (satu frame saja). Prosesnya diawasi petugas, jadi
-model ancamannya berbeda dari verifikasi harian.
+Enroll memakai satu frame, sama seperti verifikasi. Bedanya, prosesnya diawasi
+petugas, jadi wajah yang didaftarkan bisa dipastikan langsung saat itu juga.
 
 ### Saat karyawan resign
 
@@ -304,9 +296,7 @@ terikat ke satu `kode_lokasi`, di-issue saat kiosk didaftarkan, dan bisa dicabut
 public function absenKiosk(Request $request)
 {
     $this->validate($request, [
-        'challenge' => 'required|in:smile,look_left,look_right',
-        'file_a'    => 'required|image|max:5120',
-        'file_b'    => 'required|image|max:5120',
+        'file' => 'required|image|max:5120',
     ]);
 
     // Lokasi datang dari pendaftaran perangkat, BUKAN dari input request.
@@ -321,11 +311,9 @@ public function absenKiosk(Request $request)
     ])
         ->connectTimeout(5)
         ->timeout(15)
-        ->attach('file_a', file_get_contents($request->file('file_a')), 'a.jpg')
-        ->attach('file_b', file_get_contents($request->file('file_b')), 'b.jpg')
+        ->attach('file', file_get_contents($request->file('file')), 'face.jpg')
         ->post(env('FACE_SERVICE_URL') . '/api/face/identify', [
             'kode_lokasi' => $perangkat->kode_lokasi,
-            'challenge'   => $request->input('challenge'),
         ]);
 ```
 
@@ -335,7 +323,7 @@ terisi saat `matched: true`**:
 ```json
 { "matched": true,  "nik": "12345", "score": 0.9134, "reason": null }
 { "matched": false, "nik": null,    "score": 0.4210, "reason": "face_mismatch" }
-{ "matched": false, "nik": null,    "score": null,   "reason": "liveness_failed" }
+{ "matched": false, "nik": null,    "score": null,   "reason": "not_enrolled" }
 ```
 
 Saat gagal cocok, NIK kandidat terdekat sengaja tidak dikembalikan — kalau
@@ -349,10 +337,7 @@ gambar sembarang.
     if (!$hasil['matched']) {
         return response()->json([
             'status'  => 'error',
-            'message' => match ($hasil['reason']) {
-                'liveness_failed' => 'Gerakan tidak terdeteksi. Ulangi sesuai instruksi.',
-                default           => 'Wajah tidak dikenali. Gunakan absensi manual.',
-            },
+            'message' => 'Wajah tidak dikenali. Gunakan absensi manual.',
         ], 200);
     }
 
@@ -414,7 +399,7 @@ ke IP server Lumen saja — jangan mengandalkan API key sendirian.
 - [ ] `FACE_API_KEY` hanya ada di `.env` Lumen, tidak di Laravel
 - [ ] `connectTimeout` dan `timeout` diset eksplisit
 - [ ] `score` disimpan bersama catatan absensi untuk kalibrasi di kemudian hari
-- [ ] `liveness_failed` dicatat terpisah dan dipantau
+- [ ] `face_mismatch` dicatat dan dipantau per NIK
 - [ ] Vektor wajah dihapus saat karyawan resign
 - [ ] `X-Request-Id` diteruskan ke Python dan masuk log
 
