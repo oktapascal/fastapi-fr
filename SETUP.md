@@ -1,6 +1,6 @@
 # Setup Guide — Face Recognition Service
 
-Layanan ini menjawab dua pertanyaan, keduanya setelah liveness check dua frame:
+Layanan ini menjawab dua pertanyaan, keduanya dari satu frame wajah:
 
 - `/verify` — *"benarkah wajah ini milik NIK tersebut?"* Verifikasi **1:1**,
   Lumen mengirim NIK. Ini jalur utama untuk karyawan yang sudah login.
@@ -105,12 +105,11 @@ Startup pertama mengunduh bobot `vggface2` (~100 MB) ke
 # Health check — tanpa auth, menampilkan jumlah wajah yang termuat
 curl http://127.0.0.1:3000/health
 
-# Verify (1:1) — dua frame: netral + setelah gerakan challenge
+# Verify (1:1) — satu frame wajah
 curl -X POST http://127.0.0.1:3000/api/face/verify `
   -H "X-API-Key: <api-key>" `
-  -H "X-Kode-Lokasi: SAI01" `
-  -F "nik=12345" -F "challenge=smile" `
-  -F "file_a=@netral.jpg" -F "file_b=@senyum.jpg"
+  -F "nik=12345" -F "kode_lokasi=SAI01" `
+  -F "file=@wajah.jpg"
 ```
 
 Dokumentasi interaktif: <http://127.0.0.1:3000/docs>
@@ -308,7 +307,7 @@ Selama jendela itu request akan gagal — lakukan di luar jam absensi.
 | Semua wajah `matched: false` | `MATCH_THRESHOLD` terlalu tinggi — cek juga apakah ada yang menyalin `0.83` dari referensi |
 | Orang salah lolos verifikasi | `MATCH_THRESHOLD` terlalu rendah — naikkan bertahap |
 | `reason: "not_enrolled"` | NIK belum pernah di-enroll, atau cache belum ter-refresh |
-| `reason: "liveness_failed"` terus-menerus | Ambang gerakan tidak cocok dengan resolusi kamera — lihat Kalibrasi Liveness |
+| Wajah tidak terdeteksi (422) terus-menerus | Pencahayaan gelap, blur, atau wajah terlalu kecil — bandingkan kolom `terang`/`tajam` di log |
 
 ### Error 10054 di Debian (jalan di Windows lokal)
 
@@ -419,11 +418,10 @@ Ambil threshold di lembah antara dua kelompok itu. Kondisi lapangan (kamera
 murah, backlight, karyawan berkacamata) menggeser angka ini — model di atas
 kertas tidak bisa menebaknya untuk Anda.
 
-### Kalibrasi Liveness
+### Tanpa Liveness
 
-Ambang liveness ada di `app/face.py` (`check_liveness`), disalin apa adanya dari
-referensi: pelebaran mulut **>3%** untuk `smile`, selisih yaw **8 piksel** untuk
-`look_left`/`look_right`. Ambang piksel bergantung resolusi frame — kalau
-resolusi kamera Anda jauh berbeda dari yang dipakai saat referensi dikalibrasi,
-angka 8 itu perlu diuji ulang. Terlalu kecil: foto yang digoyang lolos. Terlalu
-besar: karyawan harus menoleh berlebihan.
+Service ini hanya mendeteksi dan mencocokkan wajah pada satu frame; tidak ada
+tantangan gerakan. Konsekuensinya, foto karyawan yang diarahkan ke kamera akan
+lolos seperti wajah asli. Kalau risiko titip absen perlu ditutup, pasang
+liveness sebagai lapisan terpisah (misalnya model anti-spoof pasif) sebelum
+absensi dipakai untuk keputusan penggajian.
